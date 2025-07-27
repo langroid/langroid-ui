@@ -118,11 +118,28 @@ async def websocket_endpoint(websocket: WebSocket):
    - `Entity.LLM` and `Entity.ASSISTANT`: Message sender types to filter
    - `ChatDocument`: Message format with content and metadata
    - `DONE` constant: Must be imported from `langroid.utils.constants`
+   - `MockLMConfig`: Allows testing without API keys using pattern-matched responses
 
 3. **WebSocket Considerations**:
    - Need robust session management
    - Must handle reconnections gracefully
    - Async message monitoring is complex with Langroid's sync model
+
+### MockLM Integration
+
+One positive outcome is the successful integration of Langroid's `MockLMConfig`, which allows the application to run without any API keys. The mock responses are pattern-matched based on keywords in the user input:
+
+```python
+MockLMConfig(
+    response_dict={
+        "hello": "Hello! I'm a mock Langroid agent...",
+        "5 + 7|5+7": "5 + 7 equals 12!",
+        "default": "That's interesting! As a mock agent..."
+    }
+)
+```
+
+This makes the project accessible for testing and development without requiring expensive API calls.
 
 ## Proposed Solutions (Not Yet Implemented)
 
@@ -176,13 +193,99 @@ class EventDrivenAgent(lr.ChatAgent):
 
 ### Setup
 
-1. **Backend**:
+**No API Keys Required!** The application uses Langroid's `MockLMConfig` by default, allowing you to test the chat interface without any API keys.
+
+#### Quick Start (Recommended)
+
+The easiest way to run both frontend and backend together:
+
+```bash
+# From the ui directory
+./run.sh
+```
+
+This script:
+- Starts the backend server on port 8000
+- Starts the frontend development server on port 5173
+- Handles graceful shutdown when you press Ctrl+C
+
+#### Manual Setup (Alternative)
+
+If you prefer to run each component separately or if `run.sh` doesn't work on your system:
+
+1. **Backend** (in one terminal):
    ```bash
    cd backend
    pip install -r requirements.txt
-   export OPENAI_API_KEY="your-key"  # Optional
    python main.py
    ```
+
+2. **Frontend** (in another terminal):
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
+
+### Testing the Implementation
+
+Once both servers are running:
+
+1. **Open the UI**: Navigate to http://localhost:5173 in your browser
+2. **Test Basic Connectivity**:
+   - The UI should load without errors
+   - Check browser console for WebSocket connection messages
+   - You should see "Connected to chat server" in the UI
+
+3. **Test Message Flow**:
+   - Type a message like "hello" and press Enter
+   - The backend terminal should show the message was received
+   - Watch for agent response generation in the backend logs
+   - **Current Issue**: Agent responses are generated but don't appear in the UI
+
+4. **Monitor the Backend Console**:
+   - Look for `🤖 Using MockLM` or `🔑 Using OpenAI GPT` to confirm LLM mode
+   - Watch for any error messages or stack traces
+   - Agent responses will be visible in the console even if not in UI
+
+5. **Debug WebSocket Connection**:
+   - Browser DevTools → Network tab → WS filter
+   - Look for the WebSocket connection to `ws://localhost:8000/ws`
+   - Check the Messages tab to see data flow
+
+### Running with MockLM
+
+There are three ways to use the MockLM (no API keys needed):
+
+1. **Default behavior**: Just run without any API keys
+   ```bash
+   python main.py
+   ```
+
+2. **Environment variable**: Force mock mode even with API keys
+   ```bash
+   USE_MOCK_LLM=true python main.py
+   ```
+
+3. **Command line flag**: Use the --mock flag
+   ```bash
+   python main.py --mock
+   ```
+
+The backend will print which mode it's using:
+- `🤖 Using MockLM - no API keys required!`
+- `🔑 Using OpenAI GPT (API key: sk-proj...)`
+
+### Command Line Options
+
+```bash
+python main.py --help
+
+Options:
+  --mock        Force use of MockLM even if API keys are present
+  --port PORT   Port to run the server on (default: 8000)
+  --host HOST   Host to bind the server to (default: 0.0.0.0)
+```
 
 2. **Frontend**:
    ```bash

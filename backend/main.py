@@ -95,9 +95,34 @@ class ChatSession:
         
     def _create_agent(self) -> UIChatAgent:
         """Create agent with appropriate LLM config"""
+        # Check if we should force mock mode
+        use_mock = os.getenv("USE_MOCK_LLM", "").lower() in ["true", "1", "yes"]
         openai_key = os.getenv("OPENAI_API_KEY")
         
-        if openai_key:
+        # Use mock if explicitly requested OR if no API key is present
+        if use_mock or not openai_key:
+            print("🤖 Using MockLM - no API keys required!")
+            config = ChatAgentConfig(
+                llm=MockLMConfig(
+                    response_dict={
+                        "hello": "Hello! I'm a mock Langroid agent running locally without any API keys. How can I help you test the chat interface?",
+                        "hi": "Hi there! I'm the mock assistant. Try asking me to calculate something, or ask about the weather!",
+                        "help": "I can help you test the chat UI! Try these:\n- Basic math (e.g., 'What is 5 + 7?')\n- Weather queries\n- General conversation\n- Or just chat about anything!",
+                        "weather": "I'm a mock model, so I can't check real weather, but let's pretend it's sunny with a chance of debugging! ☀️",
+                        "coding": "I love talking about code! This UI is built with React and FastAPI. What would you like to know?",
+                        "math|calculate|what is": "Let me pretend to calculate that for you... The answer is 42! (I'm a mock, so I always give the same answer 😄)",
+                        "5 + 7|5+7": "5 + 7 equals 12! (Even a mock can do simple math sometimes)",
+                        "bye|goodbye": "Goodbye! Thanks for testing the Langroid Chat UI!",
+                        "langroid": "Langroid is an amazing framework for building LLM-powered applications! This chat UI demonstrates how to integrate it with web technologies.",
+                        "test": "Testing, testing, 1-2-3! The WebSocket connection seems to be working well!",
+                        "default": "That's interesting! As a mock agent, I have limited responses, but I'm here to help test the chat interface. What else would you like to try?",
+                    },
+                    default_response="I'm a mock Langroid agent with limited responses. Try asking about math, weather, or just say hello!"
+                ),
+                system_message="You are a mock assistant for testing the Langroid Chat UI without API keys."
+            )
+        else:
+            print(f"🔑 Using OpenAI GPT (API key: {openai_key[:8]}...)")
             config = ChatAgentConfig(
                 llm=OpenAIGPTConfig(
                     chat_model="gpt-4o-mini",
@@ -105,19 +130,6 @@ class ChatSession:
                 ),
                 system_message="""You are a helpful AI assistant in a chat interface. 
                 Be concise and friendly in your responses. Remember our conversation history."""
-            )
-        else:
-            config = ChatAgentConfig(
-                llm=MockLMConfig(
-                    response_dict={
-                        "greeting": "Hello! I'm a mock assistant. I can help you test the chat interface locally without an API key.",
-                        "help": "I can respond to basic queries. Try asking me about the weather, coding, or just say hello!",
-                        "weather": "I'm a mock model, so I can't check real weather, but let's pretend it's sunny with a chance of debugging! ☀️",
-                        "coding": "I love talking about code! What programming language are you working with?",
-                        "default": "That's interesting! Tell me more about what you're working on.",
-                    }
-                ),
-                system_message="You are a mock assistant for testing the chat UI."
             )
         
         # Return our custom agent with queue-based input
@@ -287,15 +299,29 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
 if __name__ == "__main__":
+    import argparse
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Langroid Chat UI Backend")
+    parser.add_argument("--mock", action="store_true", help="Force use of MockLM even if API keys are present")
+    parser.add_argument("--port", type=int, default=8000, help="Port to run the server on (default: 8000)")
+    parser.add_argument("--host", default="0.0.0.0", help="Host to bind the server to (default: 0.0.0.0)")
+    args = parser.parse_args()
+    
     # Load environment variables
     from dotenv import load_dotenv
     load_dotenv()
     
+    # Override USE_MOCK_LLM if --mock flag is used
+    if args.mock:
+        os.environ["USE_MOCK_LLM"] = "true"
+        print("🎭 Mock mode enabled via CLI flag")
+    
     # Run the server
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
-        port=8000,
+        host=args.host,
+        port=args.port,
         reload=True,
         ws_ping_interval=30,
         ws_ping_timeout=30,
