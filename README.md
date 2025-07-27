@@ -189,7 +189,48 @@ class EventDrivenAgent(lr.ChatAgent):
 ### Prerequisites
 - Python 3.8+
 - Node.js 16+
-- Langroid installed (`pip install langroid`)
+- UV (recommended) or pip for Python package management
+
+### Environment Setup
+
+#### Using UV (Recommended)
+
+UV is a fast Python package manager that handles virtual environments automatically:
+
+```bash
+# Install UV if you haven't already
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Navigate to the backend directory
+cd backend
+
+# Create virtual environment and install dependencies
+uv venv
+uv pip install -r requirements.txt
+
+# Install Langroid
+uv pip install langroid
+```
+
+#### Using pip with venv (Alternative)
+
+```bash
+# Navigate to the backend directory
+cd backend
+
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment
+# On macOS/Linux:
+source venv/bin/activate
+# On Windows:
+# venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+pip install langroid
+```
 
 ### Setup
 
@@ -216,8 +257,14 @@ If you prefer to run each component separately or if `run.sh` doesn't work on yo
 1. **Backend** (in one terminal):
    ```bash
    cd backend
-   pip install -r requirements.txt
-   python main.py
+   
+   # If using UV:
+   uv run python main.py
+   
+   # If using venv:
+   # source venv/bin/activate  # On macOS/Linux
+   # venv\Scripts\activate     # On Windows
+   # python main.py
    ```
 
 2. **Frontend** (in another terminal):

@@ -19,7 +19,16 @@ sleep 2
 # Start backend
 echo -e "${BLUE}Starting backend server...${NC}"
 cd backend
-python main.py &
+
+# Check if UV is available and use it if present
+if command -v uv &> /dev/null; then
+    echo "Using UV to run backend..."
+    uv run python main.py &
+else
+    echo "UV not found, using Python directly..."
+    python main.py &
+fi
+
 BACKEND_PID=$!
 echo "Backend PID: $BACKEND_PID"
 
