@@ -91,9 +91,9 @@ class ChatSession:
         self.loop = loop
     
     async def send_user_message(self, content: str):
-        """Process a user message and send the agent's reply"""
+        """Process a user message using the Task and send the reply."""
         try:
-            response = self.agent.llm_response(content)
+            response = await self.task.run_async(content)
             if response is None:
                 return
             data = {
