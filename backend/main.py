@@ -14,6 +14,7 @@ from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 import uvicorn
 
@@ -129,6 +130,10 @@ async def websocket_endpoint(websocket: WebSocket):
         except:
             pass
         logger.info(f"WebSocket cleanup completed: {session_id}")
+
+
+# Mount static files after all routes - serve the parent directory for test files
+app.mount("/", StaticFiles(directory=str(Path(__file__).parent), html=True), name="static")
 
 
 def main():

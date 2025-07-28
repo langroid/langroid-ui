@@ -3,6 +3,7 @@ WebUI callbacks using method overriding approach.
 Based on the proven POC implementation.
 """
 import asyncio
+import hashlib
 import logging
 import queue
 from typing import Optional
@@ -42,6 +43,7 @@ class WebUICallbacks:
         self.waiting_for_user = False
         self.current_message_id: Optional[str] = None
         self.current_stream_id: Optional[str] = None
+        self.stream_started = False  # Track if streaming was initiated
         self.stream_buffer = []
         
         # Store the main event loop for thread-safe operations
@@ -82,6 +84,10 @@ class WebUICallbacks:
         self.agent.callbacks.start_llm_stream_async = self.start_llm_stream_async
         self.agent.callbacks.finish_llm_stream = self.finish_llm_stream
         
+        # Override show_llm_response to prevent duplicates
+        # This is called by Langroid after getting the LLM response
+        self.agent.callbacks.show_llm_response = self._show_llm_response_override
+        
         logger.info("Streaming callbacks injected")
         
     async def _process_outgoing_messages(self):
@@ -104,7 +110,11 @@ class WebUICallbacks:
         logger.info("SYNC LLM response requested")
         
         # Track if streaming was used for this response
-        was_streamed = bool(self.current_stream_id)
+        # Check if streaming was started for this response
+        was_streamed = self.stream_started
+        
+        # Reset the flag for next response
+        self.stream_started = False
         
         # Call original method
         response = self._original_llm_response(message)
@@ -116,11 +126,12 @@ class WebUICallbacks:
         #    - It was cached (cached responses don't stream)
         if response and response.content:
             is_cached = hasattr(response, 'metadata') and getattr(response.metadata, 'cached', False)
-            if not was_streamed or is_cached:
+            # Only send NEW messages (not cached ones) that weren't streamed
+            if not is_cached and not was_streamed:
                 self._send_assistant_message(response.content)
                 logger.info(f"SYNC: Sent complete message (streamed={was_streamed}, cached={is_cached})")
             else:
-                logger.info(f"SYNC: Skipped complete message (was streamed)")
+                logger.info(f"SYNC: Skipped complete message (was_streamed={was_streamed}, is_cached={is_cached})")
             
         return response
         
@@ -129,7 +140,11 @@ class WebUICallbacks:
         logger.info("ASYNC LLM response requested")
         
         # Track if streaming was used for this response
-        was_streamed = bool(self.current_stream_id)
+        # Check if streaming was started for this response
+        was_streamed = self.stream_started
+        
+        # Reset the flag for next response
+        self.stream_started = False
         
         # Call original method
         response = await self._original_llm_response_async(message)
@@ -141,11 +156,12 @@ class WebUICallbacks:
         #    - It was cached (cached responses don't stream)
         if response and response.content:
             is_cached = hasattr(response, 'metadata') and getattr(response.metadata, 'cached', False)
-            if not was_streamed or is_cached:
+            # Only send NEW messages (not cached ones) that weren't streamed
+            if not is_cached and not was_streamed:
                 self._send_assistant_message(response.content)
                 logger.info(f"ASYNC: Sent complete message (streamed={was_streamed}, cached={is_cached})")
             else:
-                logger.info(f"ASYNC: Skipped complete message (was streamed)")
+                logger.info(f"ASYNC: Skipped complete message (was_streamed={was_streamed}, is_cached={is_cached})")
             
         return response
         
@@ -191,11 +207,8 @@ class WebUICallbacks:
             
     def _send_assistant_message(self, content: str):
         """Send an assistant message to the UI."""
-        # Generate a hash of the content to detect duplicates
-        import hashlib
-        content_hash = hashlib.md5(content.encode()).hexdigest()[:8]
-        
         msg_id = str(uuid4())
+        
         message = CompleteMessage(
             message=ChatMessage(
                 id=msg_id,
@@ -203,14 +216,7 @@ class WebUICallbacks:
                 sender="assistant"
             )
         )
-        logger.info(f"Sending complete assistant message: id={msg_id}, hash={content_hash}, content_preview={content[:50]}...")
-        
-        # Add stack trace to debug where messages are coming from
-        import traceback
-        stack_summary = traceback.extract_stack()
-        logger.info("Call stack for _send_assistant_message:")
-        for frame in stack_summary[-5:-1]:  # Last 4 frames before this one
-            logger.info(f"  {frame.filename}:{frame.lineno} in {frame.name}")
+        logger.info(f"Sending complete assistant message: id={msg_id}, content_preview={content[:50]}...")
         
         self._queue_message(message.dict())
         
@@ -225,6 +231,15 @@ class WebUICallbacks:
             self.user_input_queue.put(content)
         else:
             logger.warning("Received user message but not waiting for input")
+            
+    def _show_llm_response_override(self, content: str, is_tool: bool = False, cached: bool = False, language: str = None):
+        """
+        Override of Langroid's show_llm_response callback.
+        We handle message sending in our _llm_response_with_ui method,
+        so this is a no-op to prevent duplicates.
+        """
+        # Do nothing - we handle message sending in _llm_response_with_ui
+        pass
             
     async def send_system_message(self, content: str):
         """Send a system message to the UI."""
@@ -245,6 +260,7 @@ class WebUICallbacks:
         """
         # Create a new message ID for this stream
         self.current_stream_id = str(uuid4())
+        self.stream_started = True  # Mark that streaming has started
         self.stream_buffer = []
         
         # Send stream start message
@@ -276,6 +292,7 @@ class WebUICallbacks:
         """
         # Create a new message ID for this stream
         self.current_stream_id = str(uuid4())
+        self.stream_started = True  # Mark that streaming has started
         self.stream_buffer = []
         
         # Send stream start message
