@@ -41,6 +41,8 @@ class WebUICallbacks:
         # State
         self.waiting_for_user = False
         self.current_message_id: Optional[str] = None
+        self.current_stream_id: Optional[str] = None
+        self.stream_buffer = []
         
         # Store the main event loop for thread-safe operations
         self._main_loop = asyncio.get_event_loop()
@@ -60,6 +62,7 @@ class WebUICallbacks:
         asyncio.create_task(self._process_outgoing_messages())
         
         logger.info(f"WebUICallbacks initialized for agent {agent.config.name}")
+        logger.info(f"Initial streaming state: current_stream_id={self.current_stream_id}")
         
     def _override_methods(self):
         """Override agent methods to intercept responses."""
@@ -98,27 +101,51 @@ class WebUICallbacks:
         
     def _llm_response_with_ui(self, message=None):
         """Wrapped LLM response that sends to UI."""
-        logger.info("LLM response requested")
+        logger.info("SYNC LLM response requested")
+        
+        # Track if streaming was used for this response
+        was_streamed = bool(self.current_stream_id)
         
         # Call original method
         response = self._original_llm_response(message)
         
-        # Send response to UI if we got one
+        # Only send complete message if:
+        # 1. Response exists and has content
+        # 2. AND either:
+        #    - It wasn't streamed (no streaming occurred), OR
+        #    - It was cached (cached responses don't stream)
         if response and response.content:
-            self._send_assistant_message(response.content)
+            is_cached = hasattr(response, 'metadata') and getattr(response.metadata, 'cached', False)
+            if not was_streamed or is_cached:
+                self._send_assistant_message(response.content)
+                logger.info(f"SYNC: Sent complete message (streamed={was_streamed}, cached={is_cached})")
+            else:
+                logger.info(f"SYNC: Skipped complete message (was streamed)")
             
         return response
         
     async def _llm_response_async_with_ui(self, message=None):
         """Async version of LLM response wrapper."""
-        logger.info("Async LLM response requested")
+        logger.info("ASYNC LLM response requested")
+        
+        # Track if streaming was used for this response
+        was_streamed = bool(self.current_stream_id)
         
         # Call original method
         response = await self._original_llm_response_async(message)
         
-        # Send response to UI if we got one
+        # Only send complete message if:
+        # 1. Response exists and has content
+        # 2. AND either:
+        #    - It wasn't streamed (no streaming occurred), OR
+        #    - It was cached (cached responses don't stream)
         if response and response.content:
-            self._send_assistant_message(response.content)
+            is_cached = hasattr(response, 'metadata') and getattr(response.metadata, 'cached', False)
+            if not was_streamed or is_cached:
+                self._send_assistant_message(response.content)
+                logger.info(f"ASYNC: Sent complete message (streamed={was_streamed}, cached={is_cached})")
+            else:
+                logger.info(f"ASYNC: Skipped complete message (was streamed)")
             
         return response
         
@@ -164,13 +191,27 @@ class WebUICallbacks:
             
     def _send_assistant_message(self, content: str):
         """Send an assistant message to the UI."""
+        # Generate a hash of the content to detect duplicates
+        import hashlib
+        content_hash = hashlib.md5(content.encode()).hexdigest()[:8]
+        
+        msg_id = str(uuid4())
         message = CompleteMessage(
             message=ChatMessage(
-                id=str(uuid4()),
+                id=msg_id,
                 content=content,
                 sender="assistant"
             )
         )
+        logger.info(f"Sending complete assistant message: id={msg_id}, hash={content_hash}, content_preview={content[:50]}...")
+        
+        # Add stack trace to debug where messages are coming from
+        import traceback
+        stack_summary = traceback.extract_stack()
+        logger.info("Call stack for _send_assistant_message:")
+        for frame in stack_summary[-5:-1]:  # Last 4 frames before this one
+            logger.info(f"  {frame.filename}:{frame.lineno} in {frame.name}")
+        
         self._queue_message(message.dict())
         
     def handle_user_message(self, content: str):

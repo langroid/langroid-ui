@@ -12,6 +12,7 @@ from fastapi import WebSocket
 
 import langroid as lr
 from langroid.agent.task import Task, TaskConfig
+from langroid.utils.configuration import settings
 
 from .agent_factory import create_agent
 from .callbacks import WebUICallbacks
@@ -47,6 +48,9 @@ class ChatSession:
         """Start the chat session and task loop."""
         self.running = True
         
+        # Enable quiet mode to suppress console output
+        settings.quiet = True
+        
         # Send connection status
         await self._send_connection_status()
         
@@ -67,7 +71,6 @@ class ChatSession:
             interactive=True,  # Maintains conversation loop
             config=TaskConfig(
                 addressing_prefix="",  # No prefix in messages
-                show_subtask_response=True,
                 max_cost=10.0,  # Reasonable limit
                 max_tokens=100000,  # Reasonable limit
             )

@@ -43,6 +43,8 @@
         
         // Track streaming messages
         const streamingMessages = {};
+        // Track all message IDs to prevent duplicates
+        const messageIds = new Set();
         
         function addMessage(content, sender = 'system', messageId = null) {
             const div = document.createElement('div');
@@ -99,8 +101,14 @@
                         } else {
                             msg.contentDiv.textContent = data.message.content;
                         }
+                        messageIds.add(data.message.id);
                         delete streamingMessages[data.message.id];
-                    } else {
+                    } else if (data.message.id && !messageIds.has(data.message.id)) {
+                        // Only add if we haven't seen this message ID before
+                        addMessage(data.message.content, data.message.sender, data.message.id);
+                        messageIds.add(data.message.id);
+                    } else if (!data.message.id) {
+                        // Messages without IDs are always added (like user messages)
                         addMessage(data.message.content, data.message.sender);
                     }
                 } else if (data.type === 'stream_start') {
