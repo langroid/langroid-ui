@@ -124,3 +124,4 @@ yarn-error.log*
 # TypeScript
 *.tsbuildinfo
 next-env.d.ts
+CONTRIBUTING.md

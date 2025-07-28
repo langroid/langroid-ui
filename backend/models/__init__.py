@@ -1,0 +1,1 @@
+# Message models for WebSocket communication
