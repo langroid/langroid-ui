@@ -1,6 +1,7 @@
 import type { Message } from '../../types';
 import { User, Bot } from 'lucide-react';
 import { clsx } from 'clsx';
+import ReactMarkdown from 'react-markdown';
 
 interface ChatMessageProps {
   message: Message;
@@ -8,6 +9,7 @@ interface ChatMessageProps {
 
 export function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.sender === 'user';
+  const isSystem = message.sender === 'system';
   
   return (
     <div className={clsx(
@@ -26,7 +28,13 @@ export function ChatMessage({ message }: ChatMessageProps) {
           ? 'bg-blue-500 text-white' 
           : 'bg-gray-100 text-gray-900'
       )}>
-        <p className="whitespace-pre-wrap break-words">{message.content}</p>
+        {isUser || isSystem ? (
+          <p className="whitespace-pre-wrap break-words">{message.content}</p>
+        ) : (
+          <div className="prose prose-sm max-w-none">
+            <ReactMarkdown>{message.content}</ReactMarkdown>
+          </div>
+        )}
         <span className={clsx(
           'text-xs mt-1 block',
           isUser ? 'text-blue-100' : 'text-gray-500'

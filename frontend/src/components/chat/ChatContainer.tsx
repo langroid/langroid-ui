@@ -12,6 +12,7 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [streamingMessages, setStreamingMessages] = useState<Map<string, string>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -38,9 +39,62 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          console.log('Received message:', data);
+          
           if (data.type === 'message') {
             setMessages(prev => [...prev, data.message]);
             setIsLoading(false);
+          } else if (data.type === 'stream_start') {
+            // Start a new streaming message
+            const message: Message = {
+              id: data.message_id,
+              content: '',
+              sender: data.sender || 'assistant',
+              timestamp: new Date(),
+            };
+            setMessages(prev => [...prev, message]);
+            setStreamingMessages(prev => new Map(prev).set(data.message_id, ''));
+            setIsLoading(false);
+          } else if (data.type === 'stream_token') {
+            // Add token to streaming message
+            setStreamingMessages(prev => {
+              const newMap = new Map(prev);
+              const currentContent = newMap.get(data.message_id) || '';
+              newMap.set(data.message_id, currentContent + data.token);
+              return newMap;
+            });
+            // Update message content
+            setMessages(prev => prev.map(msg => 
+              msg.id === data.message_id 
+                ? { ...msg, content: (streamingMessages.get(data.message_id) || '') + data.token }
+                : msg
+            ));
+          } else if (data.type === 'stream_end') {
+            // Finalize streaming message
+            const finalContent = streamingMessages.get(data.message_id) || '';
+            setMessages(prev => prev.map(msg => 
+              msg.id === data.message_id 
+                ? { ...msg, content: finalContent }
+                : msg
+            ));
+            setStreamingMessages(prev => {
+              const newMap = new Map(prev);
+              newMap.delete(data.message_id);
+              return newMap;
+            });
+          } else if (data.type === 'input_request') {
+            // Show system message for input request
+            const message: Message = {
+              id: Date.now().toString(),
+              content: data.prompt || 'Waiting for your input...',
+              sender: 'system',
+              timestamp: new Date(),
+            };
+            setMessages(prev => [...prev, message]);
+            setIsLoading(false);
+          } else if (data.type === 'connection') {
+            console.log('Connection status:', data);
+            // Could show a system message here if desired
           }
         } catch (error) {
           console.error('Error parsing message:', error);
