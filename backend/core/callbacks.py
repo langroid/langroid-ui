@@ -45,6 +45,8 @@ class WebUICallbacks:
         self.current_stream_id: Optional[str] = None
         self.stream_started = False  # Track if streaming was initiated
         self.stream_buffer = []
+        self.streamed_message_ids = set()  # Track which messages were streamed
+        self.cached_message_sent = False  # Track if cached message was already sent
         
         # Store the main event loop for thread-safe operations
         try:
@@ -152,6 +154,9 @@ class WebUICallbacks:
         """Wrapped LLM response that sends to UI."""
         logger.info("SYNC LLM response requested")
         
+        # Reset cached message flag at the start of a new response cycle
+        self.cached_message_sent = False
+        
         # Track if streaming was used for this response
         # Check if streaming was started for this response
         was_streamed = self.stream_started
@@ -162,19 +167,8 @@ class WebUICallbacks:
         # Call original method
         response = self._original_llm_response(message)
         
-        # Only send complete message if:
-        # 1. Response exists and has content
-        # 2. AND either:
-        #    - It wasn't streamed (no streaming occurred), OR
-        #    - It was cached (cached responses don't stream)
-        if response and response.content:
-            is_cached = hasattr(response, 'metadata') and getattr(response.metadata, 'cached', False)
-            # Only send NEW messages (not cached ones) that weren't streamed
-            if not is_cached and not was_streamed:
-                self._send_assistant_message(response.content)
-                logger.info(f"SYNC: Sent complete message (streamed={was_streamed}, cached={is_cached})")
-            else:
-                logger.info(f"SYNC: Skipped complete message (was_streamed={was_streamed}, is_cached={is_cached})")
+        # Don't send anything from this method - let llm_response_messages handle it
+        logger.info("SYNC: llm_response completed, not sending message here")
             
         return response
         
@@ -192,45 +186,49 @@ class WebUICallbacks:
         # Call original method
         response = await self._original_llm_response_async(message)
         
-        # Only send complete message if:
-        # 1. Response exists and has content
-        # 2. AND either:
-        #    - It wasn't streamed (no streaming occurred), OR
-        #    - It was cached (cached responses don't stream)
+        # Only send complete message if it's cached (cached responses don't stream)
         if response and response.content:
             is_cached = hasattr(response, 'metadata') and getattr(response.metadata, 'cached', False)
-            # Only send NEW messages (not cached ones) that weren't streamed
-            if not is_cached and not was_streamed:
+            if is_cached:
                 self._send_assistant_message(response.content)
-                logger.info(f"ASYNC: Sent complete message (streamed={was_streamed}, cached={is_cached})")
+                logger.info(f"ASYNC: Sent complete message for cached response")
             else:
-                logger.info(f"ASYNC: Skipped complete message (was_streamed={was_streamed}, is_cached={is_cached})")
+                logger.info(f"ASYNC: Skipped complete message - will be streamed")
             
         return response
         
     def _llm_response_messages_with_ui(self, *args, **kwargs):
         """Wrapped llm_response_messages that sends to UI."""
-        
         # Call original method with all arguments
         response = self._original_llm_response_messages(*args, **kwargs)
         
-        # Send to UI if we have a response
+        # This is the primary method for sending cached messages
         if response and hasattr(response, 'content') and response.content:
-            self._send_assistant_message(response.content)
-            logger.debug(f"Sent message from llm_response_messages: {response.content[:50]}...")
+            is_cached = hasattr(response, 'metadata') and getattr(response.metadata, 'cached', False)
+            if is_cached and not self.cached_message_sent:
+                self._send_assistant_message(response.content)
+                self.cached_message_sent = True
+                logger.debug("PRIMARY: Sent complete message for cached response")
+            elif is_cached:
+                logger.debug("PRIMARY: Skipped cached message - already sent")
+            else:
+                logger.debug("PRIMARY: Skipping complete message - will be streamed")
             
         return response
         
     async def _llm_response_messages_async_with_ui(self, *args, **kwargs):
         """Async wrapped llm_response_messages that sends to UI."""
-        
         # Call original method with all arguments
         response = await self._original_llm_response_messages_async(*args, **kwargs)
         
-        # Send to UI if we have a response
+        # Only send complete message if it's cached (cached responses don't stream)
         if response and hasattr(response, 'content') and response.content:
-            self._send_assistant_message(response.content)
-            logger.debug(f"Sent message from llm_response_messages_async: {response.content[:50]}...")
+            is_cached = hasattr(response, 'metadata') and getattr(response.metadata, 'cached', False)
+            if is_cached:
+                self._send_assistant_message(response.content)
+                logger.debug("Sent complete message for cached response")
+            else:
+                logger.debug("Skipping complete message - will be streamed")
             
         return response
         
@@ -240,10 +238,9 @@ class WebUICallbacks:
         # Call original method
         response = self._original_agent_response(message)
         
-        # Send to UI if we have a response
+        # Don't send anything - let llm_response_messages handle all messages
         if response and hasattr(response, 'content') and response.content:
-            self._send_assistant_message(response.content)
-            logger.debug(f"Sent message from agent_response: {response.content[:50]}...")
+            logger.debug(f"agent_response completed, not sending message here")
             
         return response
         
@@ -251,23 +248,9 @@ class WebUICallbacks:
         """Wrapped user response that waits for WebSocket input."""
         logger.info("User response requested")
         
-        # Determine prompt
-        prompt = "Enter your message:"
-        if message and hasattr(message, 'content'):
-            # Only use short prompts for system messages
-            # Don't echo the entire assistant response
-            if hasattr(message, 'metadata') and message.metadata.sender == Entity.LLM:
-                prompt = "Enter your message:"
-            else:
-                prompt = message.content
-            
-        # Send input request to UI
-        request_id = str(uuid4())
-        self._queue_message({
-            "type": "input_request",
-            "prompt": prompt,
-            "request_id": request_id
-        })
+        # We don't need to send an input_request message to the UI
+        # The frontend already has a persistent input field
+        # Just wait for user input
         
         # Wait for user input
         self.waiting_for_user = True
@@ -289,6 +272,11 @@ class WebUICallbacks:
             
     def _send_assistant_message(self, content: str):
         """Send an assistant message to the UI."""
+        # Don't send empty messages
+        if not content or not content.strip():
+            logger.warning("Skipping empty assistant message")
+            return
+            
         msg_id = str(uuid4())
         
         message = CompleteMessage(
@@ -340,6 +328,9 @@ class WebUICallbacks:
         self.current_stream_id = str(uuid4())
         self.stream_started = True  # Mark that streaming has started
         self.stream_buffer = []
+        
+        # Track that this message ID is being streamed
+        self.streamed_message_ids.add(self.current_stream_id)
         
         # Send stream start message
         message = StreamStart(
@@ -405,13 +396,23 @@ class WebUICallbacks:
             is_tool: Whether this is a tool response
         """
         if self.current_stream_id:
-            # Send stream end message
-            end_msg = StreamEnd(
-                message_id=self.current_stream_id
-            )
-            self._queue_message(end_msg.dict())
-            
-            logger.info(f"Finished LLM stream: {self.current_stream_id}")
+            # Check if any tokens were actually streamed
+            if not self.stream_buffer:
+                # No tokens were streamed - this was likely a cached response
+                # Send a delete message to remove the empty bubble
+                logger.info(f"No tokens streamed for {self.current_stream_id} - removing empty message")
+                delete_msg = {
+                    "type": "delete_message",
+                    "message_id": self.current_stream_id
+                }
+                self._queue_message(delete_msg)
+            else:
+                # Normal stream end - tokens were streamed
+                end_msg = StreamEnd(
+                    message_id=self.current_stream_id
+                )
+                self._queue_message(end_msg.dict())
+                logger.info(f"Finished LLM stream: {self.current_stream_id}")
             
             # Note: We don't send the complete message here because
             # our _llm_response_with_ui will handle that

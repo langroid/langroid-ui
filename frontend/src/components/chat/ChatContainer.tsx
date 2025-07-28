@@ -65,37 +65,37 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
             setStreamingMessages(prev => {
               const newMap = new Map(prev);
               const currentContent = newMap.get(data.message_id) || '';
-              newMap.set(data.message_id, currentContent + data.token);
+              const newContent = currentContent + data.token;
+              newMap.set(data.message_id, newContent);
+              
+              // Update message content with the accumulated content
+              setMessages(messages => messages.map(msg => 
+                msg.id === data.message_id 
+                  ? { ...msg, content: newContent }
+                  : msg
+              ));
+              
               return newMap;
             });
-            // Update message content
-            setMessages(prev => prev.map(msg => 
-              msg.id === data.message_id 
-                ? { ...msg, content: (streamingMessages.get(data.message_id) || '') + data.token }
-                : msg
-            ));
           } else if (data.type === 'stream_end') {
-            // Finalize streaming message
-            const finalContent = streamingMessages.get(data.message_id) || '';
-            setMessages(prev => prev.map(msg => 
-              msg.id === data.message_id 
-                ? { ...msg, content: finalContent }
-                : msg
-            ));
+            // Stream has ended, just clean up the streaming state
+            // The content is already in the message from the stream_token updates
+            setStreamingMessages(prev => {
+              const newMap = new Map(prev);
+              newMap.delete(data.message_id);
+              return newMap;
+            });
+          } else if (data.type === 'delete_message') {
+            // Remove a message (used for empty streaming bubbles)
+            setMessages(prev => prev.filter(msg => msg.id !== data.message_id));
             setStreamingMessages(prev => {
               const newMap = new Map(prev);
               newMap.delete(data.message_id);
               return newMap;
             });
           } else if (data.type === 'input_request') {
-            // Show system message for input request
-            const message: Message = {
-              id: Date.now().toString(),
-              content: data.prompt || 'Waiting for your input...',
-              sender: 'system',
-              timestamp: new Date(),
-            };
-            setMessages(prev => [...prev, message]);
+            // We no longer show input requests as messages
+            // The UI has a persistent input field
             setIsLoading(false);
           } else if (data.type === 'connection') {
             console.log('Connection status:', data);
