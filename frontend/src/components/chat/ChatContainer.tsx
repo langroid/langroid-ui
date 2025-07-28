@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Message } from '../../types';
 import { ChatMessage } from './ChatMessage';
-import { ChatInput } from './ChatInput';
+import { ChatInput, type ChatInputRef } from './ChatInput';
 import { Loader2 } from 'lucide-react';
 
 interface ChatContainerProps {
@@ -15,6 +15,7 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
   const [streamingMessages, setStreamingMessages] = useState<Map<string, string>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const inputRef = useRef<ChatInputRef | null>(null);
 
   // Auto-scroll to bottom when new messages arrive
   const scrollToBottom = () => {
@@ -33,6 +34,8 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
 
       ws.onopen = () => {
         setIsConnected(true);
+        // Focus input on initial connection
+        setTimeout(() => inputRef.current?.focus(), 200);
       };
 
       ws.onmessage = (event) => {
@@ -49,6 +52,11 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
             
             setMessages(prev => [...prev, message]);
             setIsLoading(false);
+            
+            // Focus input after assistant message
+            if (message.sender === 'assistant') {
+              setTimeout(() => inputRef.current?.focus(), 100);
+            }
           } else if (data.type === 'stream_start') {
             // Start a new streaming message
             const message: Message = {
@@ -85,6 +93,9 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
               newMap.delete(data.message_id);
               return newMap;
             });
+            
+            // Focus input after streaming completes
+            setTimeout(() => inputRef.current?.focus(), 100);
           } else if (data.type === 'delete_message') {
             // Remove a message (used for empty streaming bubbles)
             setMessages(prev => prev.filter(msg => msg.id !== data.message_id));
@@ -192,7 +203,7 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
       </div>
 
       {/* Input */}
-      <ChatInput onSend={handleSendMessage} disabled={!isConnected || isLoading} />
+      <ChatInput ref={inputRef} onSend={handleSendMessage} disabled={!isConnected || isLoading} />
     </div>
   );
 }

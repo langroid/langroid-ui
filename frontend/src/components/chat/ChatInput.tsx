@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import type { KeyboardEvent } from 'react';
 import { Send } from 'lucide-react';
 
@@ -7,9 +7,20 @@ interface ChatInputProps {
   disabled?: boolean;
 }
 
-export function ChatInput({ onSend, disabled }: ChatInputProps) {
+export interface ChatInputRef {
+  focus: () => void;
+}
+
+export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({ onSend, disabled }, ref) => {
   const [message, setMessage] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Expose focus method to parent
+  useImperativeHandle(ref, () => ({
+    focus: () => {
+      textareaRef.current?.focus();
+    }
+  }), []);
 
   const handleSubmit = () => {
     if (message.trim() && !disabled) {
@@ -59,4 +70,6 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
       </div>
     </div>
   );
-}
+});
+
+ChatInput.displayName = 'ChatInput';
