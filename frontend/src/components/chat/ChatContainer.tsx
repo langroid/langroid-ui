@@ -32,17 +32,22 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
       wsRef.current = ws;
 
       ws.onopen = () => {
-        console.log('WebSocket connected');
         setIsConnected(true);
       };
 
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          console.log('Received message:', data);
-          
           if (data.type === 'message') {
-            setMessages(prev => [...prev, data.message]);
+            // Backend sends CompleteMessage with nested message object
+            const message: Message = {
+              id: data.message.id,
+              content: data.message.content,
+              sender: data.message.sender,
+              timestamp: new Date(data.message.timestamp),
+            };
+            
+            setMessages(prev => [...prev, message]);
             setIsLoading(false);
           } else if (data.type === 'stream_start') {
             // Start a new streaming message
@@ -102,7 +107,6 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
       };
 
       ws.onclose = () => {
-        console.log('WebSocket disconnected');
         setIsConnected(false);
       };
 
@@ -131,11 +135,12 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
     setIsLoading(true);
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
+      const messageData = {
         type: 'message',
         content,
         sessionId,
-      }));
+      };
+      wsRef.current.send(JSON.stringify(messageData));
     }
   };
 

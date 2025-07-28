@@ -54,6 +54,9 @@ class ChatSession:
         # Send connection status
         await self._send_connection_status()
         
+        # Start the message processor coroutine
+        await self.callbacks.start_processor()
+        
         # Send welcome message
         await self.callbacks.send_system_message(
             "Welcome! I'm ready to chat. Type a message to begin our conversation."
@@ -75,6 +78,16 @@ class ChatSession:
                 max_tokens=100000,  # Reasonable limit
             )
         )
+        
+        # CRITICAL FIX: Update Task's internal method references after our overrides
+        # The Task captures method references during __init__, but we need it to use our overridden methods
+        if hasattr(self.task, '_entity_responder_map'):
+            from langroid.mytypes import Entity
+            
+            # Get fresh method references from the agent (our overridden methods)
+            fresh_responders = self.agent.entity_responders()
+            self.task._entity_responder_map = dict(fresh_responders)
+            logger.info("Updated Task's entity responder map with overridden methods")
         
         # Run task in thread
         def run_task():
@@ -104,16 +117,19 @@ class ChatSession:
             data: Message data from WebSocket
         """
         try:
+            logger.info(f"Session {self.session_id} received data: {data}")
             msg_type = data.get("type")
             
             if msg_type == "message":
                 # User message - pass to agent via callbacks
                 content = data.get("content", "")
                 if content:
-                    logger.info(f"Session {self.session_id} received: {content[:50]}...")
+                    logger.info(f"Session {self.session_id} received message: {content[:50]}...")
                     
                     # Pass to agent callbacks (frontend already displays user messages)
                     self.callbacks.handle_user_message(content)
+                else:
+                    logger.warning(f"Session {self.session_id} received empty message")
                     
             elif msg_type == "command":
                 # Handle system commands

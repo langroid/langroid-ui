@@ -47,7 +47,14 @@ class WebUICallbacks:
         self.stream_buffer = []
         
         # Store the main event loop for thread-safe operations
-        self._main_loop = asyncio.get_event_loop()
+        try:
+            self._main_loop = asyncio.get_running_loop()
+            logger.info(f"🔄 Stored running event loop: {id(self._main_loop)}")
+        except RuntimeError:
+            # If no running loop, try to get the current one
+            self._main_loop = asyncio.get_event_loop()
+            logger.info(f"🔄 Stored current event loop: {id(self._main_loop)}")
+            logger.warning("⚠️ No running loop when initializing callbacks")
         
         # Store original methods before overriding
         self._original_llm_response = agent.llm_response
@@ -60,17 +67,44 @@ class WebUICallbacks:
         # Inject streaming callbacks
         self._inject_streaming_callbacks()
         
-        # Start message processor
-        asyncio.create_task(self._process_outgoing_messages())
+        # Start message processor - this will be started by the session manager
+        self._processor_task = None
         
         logger.info(f"WebUICallbacks initialized for agent {agent.config.name}")
-        logger.info(f"Initial streaming state: current_stream_id={self.current_stream_id}")
+        
+    async def start_processor(self):
+        """Start the message processor coroutine."""
+        if self._processor_task is None:
+            logger.info("🚀 Starting message processor task")
+            self._processor_task = asyncio.create_task(self._process_outgoing_messages())
+            logger.info(f"🚀 Message processor task created: {self._processor_task}")
+        else:
+            logger.warning("⚠️ Message processor already running")
         
     def _override_methods(self):
         """Override agent methods to intercept responses."""
+        # Store original methods
+        self._original_llm_response = self.agent.llm_response
+        self._original_llm_response_async = self.agent.llm_response_async
+        self._original_user_response = self.agent.user_response
+        
+        # Override main methods
         self.agent.llm_response = self._llm_response_with_ui
         self.agent.llm_response_async = self._llm_response_async_with_ui
         self.agent.user_response = self._user_response_with_ui
+        
+        # ALSO override the methods that Tasks might actually call
+        if hasattr(self.agent, 'llm_response_messages'):
+            self._original_llm_response_messages = self.agent.llm_response_messages
+            self.agent.llm_response_messages = self._llm_response_messages_with_ui
+            
+        if hasattr(self.agent, 'llm_response_messages_async'):
+            self._original_llm_response_messages_async = self.agent.llm_response_messages_async
+            self.agent.llm_response_messages_async = self._llm_response_messages_async_with_ui
+            
+        if hasattr(self.agent, 'agent_response'):
+            self._original_agent_response = self.agent.agent_response
+            self.agent.agent_response = self._agent_response_with_ui
         
     def _inject_streaming_callbacks(self):
         """Inject streaming callbacks into the agent."""
@@ -92,14 +126,23 @@ class WebUICallbacks:
         
     async def _process_outgoing_messages(self):
         """Process messages from queue and send via WebSocket."""
+        logger.debug("Starting _process_outgoing_messages coroutine")
         while True:
             try:
                 message = await self.outgoing_queue.get()
+                logger.debug(f"Sending message: type={message.get('type')}")
+                
                 await self.websocket.send_json(message)
-                logger.debug(f"Sent message type: {message.get('type')}")
+                
+                # Mark the task as done
+                self.outgoing_queue.task_done()
+                
             except Exception as e:
-                logger.error(f"Error sending message: {e}")
+                logger.error(f"❌ Error in _process_outgoing_messages: {e}")
+                import traceback
+                traceback.print_exc()
                 break
+        logger.error("_process_outgoing_messages coroutine ended")
                 
     def _queue_message(self, message: dict):
         """Queue a message for sending via WebSocket."""
@@ -165,6 +208,45 @@ class WebUICallbacks:
             
         return response
         
+    def _llm_response_messages_with_ui(self, *args, **kwargs):
+        """Wrapped llm_response_messages that sends to UI."""
+        
+        # Call original method with all arguments
+        response = self._original_llm_response_messages(*args, **kwargs)
+        
+        # Send to UI if we have a response
+        if response and hasattr(response, 'content') and response.content:
+            self._send_assistant_message(response.content)
+            logger.debug(f"Sent message from llm_response_messages: {response.content[:50]}...")
+            
+        return response
+        
+    async def _llm_response_messages_async_with_ui(self, *args, **kwargs):
+        """Async wrapped llm_response_messages that sends to UI."""
+        
+        # Call original method with all arguments
+        response = await self._original_llm_response_messages_async(*args, **kwargs)
+        
+        # Send to UI if we have a response
+        if response and hasattr(response, 'content') and response.content:
+            self._send_assistant_message(response.content)
+            logger.debug(f"Sent message from llm_response_messages_async: {response.content[:50]}...")
+            
+        return response
+        
+    def _agent_response_with_ui(self, message=None):
+        """Wrapped agent_response that sends to UI."""
+        
+        # Call original method
+        response = self._original_agent_response(message)
+        
+        # Send to UI if we have a response
+        if response and hasattr(response, 'content') and response.content:
+            self._send_assistant_message(response.content)
+            logger.debug(f"Sent message from agent_response: {response.content[:50]}...")
+            
+        return response
+        
     def _user_response_with_ui(self, message=None):
         """Wrapped user response that waits for WebSocket input."""
         logger.info("User response requested")
@@ -216,21 +298,17 @@ class WebUICallbacks:
                 sender="assistant"
             )
         )
-        logger.info(f"Sending complete assistant message: id={msg_id}, content_preview={content[:50]}...")
-        
         self._queue_message(message.dict())
         
     def handle_user_message(self, content: str):
         """
         Called when user sends a message via WebSocket.
-        If we're waiting for input, queue it for the waiting method.
+        Always queue the message - the waiting method will consume it.
         """
-        logger.info(f"Handling user message: {content[:50]}...")
-        
-        if self.waiting_for_user:
-            self.user_input_queue.put(content)
-        else:
-            logger.warning("Received user message but not waiting for input")
+        # Always queue the message - don't check waiting_for_user flag
+        # This ensures messages aren't lost if they arrive before _user_response_with_ui is called
+        self.user_input_queue.put(content)
+        logger.debug(f"User message queued: {content[:50]}...")
             
     def _show_llm_response_override(self, content: str, is_tool: bool = False, cached: bool = False, language: str = None):
         """
