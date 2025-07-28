@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Langroid Streaming Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        #messages { border: 1px solid #ccc; height: 400px; overflow-y: auto; padding: 10px; margin-bottom: 10px; }
+        .message { margin: 10px 0; padding: 10px; border-radius: 5px; }
+        .user { background: #e3f2fd; }
+        .assistant { background: #f5f5f5; }
+        .system { background: #fff3cd; }
+        .streaming { background: #e8f5e9; font-style: italic; }
+        
+        /* Markdown styles */
+        .message-content { white-space: pre-wrap; }
+        .message-content h1 { font-size: 1.5em; margin: 10px 0; }
+        .message-content h2 { font-size: 1.3em; margin: 8px 0; }
+        .message-content h3 { font-size: 1.1em; margin: 6px 0; }
+        .message-content h4 { font-size: 1em; margin: 5px 0; }
+        .message-content ul, .message-content ol { margin: 5px 0; padding-left: 20px; }
+        .message-content li { margin: 3px 0; }
+        .message-content code { background: #f0f0f0; padding: 2px 4px; border-radius: 3px; font-family: monospace; }
+        .message-content pre { background: #f0f0f0; padding: 10px; border-radius: 5px; overflow-x: auto; }
+        .message-content strong { font-weight: bold; }
+        .message-content em { font-style: italic; }
+        
+        #input { width: 70%; padding: 10px; }
+        #send { padding: 10px 20px; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <h1>Langroid WebSocket Streaming Test</h1>
+    <div id="messages"></div>
+    <input type="text" id="input" placeholder="Type a message..." />
+    <button id="send">Send</button>
+    
+    <script>
+        let ws = null;
+        const messagesDiv = document.getElementById('messages');
+        const input = document.getElementById('input');
+        const sendBtn = document.getElementById('send');
+        
+        // Track streaming messages
+        const streamingMessages = {};
+        
+        function addMessage(content, sender = 'system', messageId = null) {
+            const div = document.createElement('div');
+            div.className = `message ${sender}`;
+            
+            // Create sender label
+            const senderLabel = document.createElement('strong');
+            senderLabel.textContent = `${sender}: `;
+            div.appendChild(senderLabel);
+            
+            // Create content div
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            
+            // Render markdown for assistant messages
+            if (sender === 'assistant' && content) {
+                contentDiv.innerHTML = marked.parse(content);
+            } else {
+                contentDiv.textContent = content;
+            }
+            
+            div.appendChild(contentDiv);
+            
+            if (messageId) {
+                div.id = `msg-${messageId}`;
+            }
+            messagesDiv.appendChild(div);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            return div;
+        }
+        
+        function connect() {
+            ws = new WebSocket('ws://localhost:8000/ws');
+            
+            ws.onopen = () => {
+                addMessage('Connected to backend');
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                console.log('Received:', data);
+                
+                if (data.type === 'connection') {
+                    addMessage(`Session: ${data.session_id}`, 'system');
+                } else if (data.type === 'message') {
+                    // Complete message
+                    if (streamingMessages[data.message.id]) {
+                        // Replace streaming message with final
+                        const msg = streamingMessages[data.message.id];
+                        msg.div.className = `message ${data.message.sender}`;
+                        // Ensure final content is rendered with markdown
+                        if (data.message.sender === 'assistant') {
+                            msg.contentDiv.innerHTML = marked.parse(data.message.content);
+                        } else {
+                            msg.contentDiv.textContent = data.message.content;
+                        }
+                        delete streamingMessages[data.message.id];
+                    } else {
+                        addMessage(data.message.content, data.message.sender);
+                    }
+                } else if (data.type === 'stream_start') {
+                    // Start streaming
+                    const div = document.createElement('div');
+                    div.className = 'message streaming';
+                    div.id = `msg-${data.message_id}`;
+                    
+                    const senderLabel = document.createElement('strong');
+                    senderLabel.textContent = `${data.sender}: `;
+                    div.appendChild(senderLabel);
+                    
+                    const contentDiv = document.createElement('div');
+                    contentDiv.className = 'message-content';
+                    div.appendChild(contentDiv);
+                    
+                    messagesDiv.appendChild(div);
+                    streamingMessages[data.message_id] = {
+                        div: div,
+                        contentDiv: contentDiv,
+                        content: ''
+                    };
+                } else if (data.type === 'stream_token') {
+                    // Add token to streaming message
+                    if (streamingMessages[data.message_id]) {
+                        const msg = streamingMessages[data.message_id];
+                        msg.content += data.token;
+                        // Update the content div with rendered markdown
+                        msg.contentDiv.innerHTML = marked.parse(msg.content);
+                        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                    }
+                } else if (data.type === 'stream_end') {
+                    // Streaming ended
+                    if (streamingMessages[data.message_id]) {
+                        streamingMessages[data.message_id].div.className = 'message assistant';
+                        delete streamingMessages[data.message_id];
+                    }
+                } else if (data.type === 'input_request') {
+                    addMessage(`Waiting for input: ${data.prompt}`, 'system');
+                }
+            };
+            
+            ws.onerror = (error) => {
+                addMessage('WebSocket error: ' + error, 'system');
+            };
+            
+            ws.onclose = () => {
+                addMessage('Disconnected from backend', 'system');
+            };
+        }
+        
+        function sendMessage() {
+            const content = input.value.trim();
+            if (content && ws && ws.readyState === WebSocket.OPEN) {
+                const message = {
+                    type: 'message',
+                    content: content
+                };
+                ws.send(JSON.stringify(message));
+                addMessage(content, 'user');
+                input.value = '';
+            }
+        }
+        
+        sendBtn.onclick = sendMessage;
+        input.onkeypress = (e) => {
+            if (e.key === 'Enter') sendMessage();
+        };
+        
+        // Connect on load
+        connect();
+    </script>
+</body>
+</html>

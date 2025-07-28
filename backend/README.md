@@ -53,6 +53,7 @@ PORT=8000
 - ✅ Clean session management
 - ✅ Support for both MockLM and real LLMs
 - ✅ Compatible with existing frontend
+- ✅ Streaming support for real-time token display
 
 ## Testing
 

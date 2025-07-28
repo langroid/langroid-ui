@@ -13,7 +13,10 @@ from fastapi import WebSocket
 import langroid as lr
 from langroid.mytypes import Entity
 
-from models.messages import ChatMessage, CompleteMessage, InputRequest
+from models.messages import (
+    ChatMessage, CompleteMessage, InputRequest,
+    StreamStart, StreamToken, StreamEnd
+)
 from utils.async_bridge import queue_message_threadsafe
 
 logger = logging.getLogger(__name__)
@@ -50,6 +53,9 @@ class WebUICallbacks:
         # Override agent methods
         self._override_methods()
         
+        # Inject streaming callbacks
+        self._inject_streaming_callbacks()
+        
         # Start message processor
         asyncio.create_task(self._process_outgoing_messages())
         
@@ -60,6 +66,20 @@ class WebUICallbacks:
         self.agent.llm_response = self._llm_response_with_ui
         self.agent.llm_response_async = self._llm_response_async_with_ui
         self.agent.user_response = self._user_response_with_ui
+        
+    def _inject_streaming_callbacks(self):
+        """Inject streaming callbacks into the agent."""
+        # Ensure agent has callbacks object
+        if not hasattr(self.agent, 'callbacks'):
+            from types import SimpleNamespace
+            self.agent.callbacks = SimpleNamespace()
+            
+        # Set streaming callbacks
+        self.agent.callbacks.start_llm_stream = self.start_llm_stream
+        self.agent.callbacks.start_llm_stream_async = self.start_llm_stream_async
+        self.agent.callbacks.finish_llm_stream = self.finish_llm_stream
+        
+        logger.info("Streaming callbacks injected")
         
     async def _process_outgoing_messages(self):
         """Process messages from queue and send via WebSocket."""
@@ -109,7 +129,12 @@ class WebUICallbacks:
         # Determine prompt
         prompt = "Enter your message:"
         if message and hasattr(message, 'content'):
-            prompt = message.content
+            # Only use short prompts for system messages
+            # Don't echo the entire assistant response
+            if hasattr(message, 'metadata') and message.metadata.sender == Entity.LLM:
+                prompt = "Enter your message:"
+            else:
+                prompt = message.content
             
         # Send input request to UI
         request_id = str(uuid4())
@@ -170,3 +195,91 @@ class WebUICallbacks:
             )
         )
         await self.outgoing_queue.put(message.dict())
+        
+    # Streaming support methods
+    
+    def start_llm_stream(self):
+        """
+        Called when LLM starts streaming. Returns a function that handles tokens.
+        """
+        # Create a new message ID for this stream
+        self.current_stream_id = str(uuid4())
+        self.stream_buffer = []
+        
+        # Send stream start message
+        message = StreamStart(
+            message_id=self.current_stream_id,
+            sender="assistant"
+        )
+        self._queue_message(message.dict())
+        
+        logger.info(f"Started LLM stream: {self.current_stream_id}")
+        
+        # Return the token handler function
+        def stream_token(token: str, event_type=None):
+            """Handle a single streaming token."""
+            self.stream_buffer.append(token)
+            
+            # Send token to frontend
+            token_msg = StreamToken(
+                message_id=self.current_stream_id,
+                token=token
+            )
+            self._queue_message(token_msg.dict())
+            
+        return stream_token
+        
+    async def start_llm_stream_async(self):
+        """
+        Async version of start_llm_stream for async LLM calls.
+        """
+        # Create a new message ID for this stream
+        self.current_stream_id = str(uuid4())
+        self.stream_buffer = []
+        
+        # Send stream start message
+        message = StreamStart(
+            message_id=self.current_stream_id,
+            sender="assistant"
+        )
+        await self.outgoing_queue.put(message.dict())
+        
+        logger.info(f"Started async LLM stream: {self.current_stream_id}")
+        
+        # Return the async token handler function
+        async def stream_token(token: str, event_type=None):
+            """Handle a single streaming token asynchronously."""
+            self.stream_buffer.append(token)
+            
+            # Send token to frontend
+            token_msg = StreamToken(
+                message_id=self.current_stream_id,
+                token=token
+            )
+            await self.outgoing_queue.put(token_msg.dict())
+            
+        return stream_token
+        
+    def finish_llm_stream(self, content: str = "", is_tool: bool = False):
+        """
+        Called when LLM finishes streaming.
+        
+        Args:
+            content: The complete response content
+            is_tool: Whether this is a tool response
+        """
+        if self.current_stream_id:
+            # Send stream end message
+            end_msg = StreamEnd(
+                message_id=self.current_stream_id
+            )
+            self._queue_message(end_msg.dict())
+            
+            logger.info(f"Finished LLM stream: {self.current_stream_id}")
+            
+            # Note: We don't send the complete message here because
+            # our _llm_response_with_ui will handle that
+            
+            # Clear stream state
+            self.current_stream_id = None
+            self.stream_buffer = []
