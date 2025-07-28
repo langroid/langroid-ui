@@ -32,16 +32,38 @@ class Message(BaseModel):
     timestamp: datetime
 
 
+class WebCallbacks:
+    """Callbacks to bridge Langroid Agent with the WebSocket frontend."""
+
+    def __init__(self, session: "ChatSession") -> None:
+        self.session = session
+        agent = session.agent
+        agent.callbacks.show_agent_response = self.show_message
+        agent.callbacks.show_llm_response = self.show_message
+        agent.callbacks.get_user_response_async = self.get_user_response_async
+
+    async def get_user_response_async(self, prompt: str) -> str:
+        if prompt:
+            await self.session._send_bot_message(prompt)
+        return await self.session.user_queue.get()
+
+    def show_message(self, content: str, language: str = "text", is_tool: bool = False) -> None:  # noqa: D401
+        asyncio.create_task(self.session._send_bot_message(content))
+
+
 class ChatSession:
     """Manage a chat session using a Langroid agent"""
 
     def __init__(self, session_id: str, websocket: WebSocket):
         self.session_id = session_id
         self.websocket = websocket
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.user_queue: asyncio.Queue[str] = asyncio.Queue()
 
         # Create the agent
         self.agent = self._create_agent()
-        self.task = Task(self.agent, interactive=False)
+        self.task = Task(self.agent, interactive=True)
+        self.callbacks = WebCallbacks(self)
         
     def _create_agent(self) -> ChatAgent:
         """Create agent with appropriate LLM config"""
@@ -87,28 +109,15 @@ class ChatSession:
     
     
     async def start(self, loop: asyncio.AbstractEventLoop):
-        """Initialize session (no background threads needed)"""
+        """Start the task loop in the given event loop."""
         self.loop = loop
-    
+        asyncio.create_task(self.task.run_async())
+        await self._send_bot_message("👋 Connected to Langroid chat!")
+
     async def send_user_message(self, content: str):
-        """Process a user message using the Task and send the reply."""
-        try:
-            response = await self.task.run_async(content)
-            if response is None:
-                return
-            data = {
-                "type": "message",
-                "message": {
-                    "id": f"{datetime.now().timestamp()}",
-                    "content": response.content,
-                    "sender": "assistant",
-                    "timestamp": datetime.now().isoformat(),
-                },
-            }
-            await self._send_to_frontend(data)
-        except Exception as e:
-            print(f"Error processing message: {e}")
-    
+        """Send user input to the running task."""
+        await self.user_queue.put(content)
+
     async def _send_to_frontend(self, data: dict):
         """Send data to frontend via WebSocket"""
         if self.loop and self.websocket:
@@ -116,10 +125,22 @@ class ChatSession:
                 await self.websocket.send_json(data)
             except Exception as e:
                 print(f"Error sending to frontend: {e}")
+
+    async def _send_bot_message(self, content: str):
+        data = {
+            "type": "message",
+            "message": {
+                "id": f"{datetime.now().timestamp()}",
+                "content": content,
+                "sender": "assistant",
+                "timestamp": datetime.now().isoformat(),
+            },
+        }
+        await self._send_to_frontend(data)
     
     def stop(self):
         """Stop the chat session"""
-        pass
+        self.task.close_loggers()
 
 
 class ConnectionManager:
