@@ -95,7 +95,7 @@ class WebSocketCallbacks:
         agent.callbacks.get_user_response = self.get_user_response
         agent.callbacks.get_user_response_async = self.get_user_response_async
         
-        # Apply minimal method overrides only where callbacks don't exist
+        # Apply minimal method overrides to ensure callbacks are triggered
         self._apply_essential_overrides(agent)
         
         logger.info(f"Callbacks attached to agent {agent.config.name}")
@@ -226,10 +226,19 @@ class WebSocketCallbacks:
     
     def show_llm_response(self, content: str, is_tool: bool = False, cached: bool = False, **kwargs) -> None:
         """Show LLM response - called for non-streaming responses."""
-        logger.info(f"🎯 show_llm_response CALLED! content={content[:50] if content else 'None'}")
-        # Do nothing - we handle message sending in our method overrides
-        # This prevents duplicate messages
-        pass
+        logger.info(f"🎯 show_llm_response CALLED! content={content[:50] if content else 'None'}, cached={cached}")
+        
+        # Since we're using pure callbacks, we MUST send the message here
+        if content:
+            message = CompleteMessage(
+                message=ChatMessage(
+                    id=str(uuid4()),
+                    content=content,
+                    sender="assistant"
+                )
+            )
+            self._queue_message(message.dict())
+            logger.info(f"✅ Queued LLM response message for sending")
         
     def show_agent_response(self, content: str, language: str = None, **kwargs) -> None:
         """Show agent response (tool results, etc)."""
@@ -364,9 +373,17 @@ class WebSocketCallbacks:
         # Call original method
         response = await agent._original_llm_response_messages_async(*args, **kwargs)
         
-        # Manually trigger callback if Langroid doesn't
+        # Only send complete message if it's cached AND not already sent
         if response and hasattr(response, 'content') and response.content:
-            self.show_llm_response(content=response.content, cached=getattr(response.metadata, 'cached', False) if hasattr(response, 'metadata') else False)
+            is_cached = hasattr(response, 'metadata') and getattr(response.metadata, 'cached', False)
+            if is_cached and not self._cached_message_sent:
+                self._send_assistant_message(response.content)
+                self._cached_message_sent = True
+                logger.debug("ASYNC: Sent complete message for cached response")
+            elif is_cached:
+                logger.debug("ASYNC: Skipped cached message - already sent")
+            else:
+                logger.debug("ASYNC: Skipping complete message - will be streamed")
             
         return response
         
@@ -436,9 +453,14 @@ class WebSocketCallbacks:
             if hasattr(agent, '_original_agent_response'):
                 agent.agent_response = agent._original_agent_response
                 
-        # Clear callbacks
+        # Clear callbacks by removing our attached callbacks
         if hasattr(agent, 'callbacks'):
-            agent.callbacks = SimpleNamespace()
+            for attr_name in ['start_llm_stream', 'start_llm_stream_async', 'finish_llm_stream', 
+                             'cancel_llm_stream', 'show_llm_response', 'show_agent_response', 
+                             'show_error_message', 'show_start_response', 'get_user_response', 
+                             'get_user_response_async']:
+                if hasattr(agent.callbacks, attr_name):
+                    delattr(agent.callbacks, attr_name)
             
         logger.info(f"Callbacks detached from agent {agent.config.name}")
 

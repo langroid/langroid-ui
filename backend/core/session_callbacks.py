@@ -69,8 +69,12 @@ class CallbackChatSession:
         
         logger.info(f"Session initialized with agent: {agent.config.name}")
         
-    async def start(self):
-        """Start the chat session."""
+    async def start(self, send_greeting: bool = True):
+        """Start the chat session.
+        
+        Args:
+            send_greeting: Whether to send initial greeting (False for reused sessions)
+        """
         self._running = True
         
         # Send connection status
@@ -85,14 +89,19 @@ class CallbackChatSession:
         # Start message processor
         self._processor_task = asyncio.create_task(self._process_outgoing_messages())
         
-        # Start task in thread
-        self._task_thread = threading.Thread(
-            target=self._run_task,
-            name=f"Task-{self.session_id}"
-        )
-        self._task_thread.start()
+        if send_greeting and (not self._task_thread or not self._task_thread.is_alive()):
+            # Delay task start to ensure WebSocket is stable
+            await asyncio.sleep(0.1)
+            
+            # Start task in thread
+            self._task_thread = threading.Thread(
+                target=self._run_task,
+                name=f"Task-{self.session_id}"
+            )
+            self._task_thread.start()
+        # else: Reusing existing session, task is already running
         
-        logger.info(f"Session {self.session_id} started")
+        logger.info(f"Session {self.session_id} started (send_greeting={send_greeting})")
         
     def _run_task(self):
         """Run the Langroid task in a thread."""
@@ -122,17 +131,29 @@ class CallbackChatSession:
                 continue
             except Exception as e:
                 logger.error(f"Error processing outgoing message: {e}", exc_info=True)
+                # Don't crash on WebSocket errors, just continue
+                if "WebSocket" in str(e):
+                    continue
         logger.info(f"Stopped _process_outgoing_messages for session {self.session_id}")
                 
     async def _send_message(self, message: Any):
         """Send a message via WebSocket."""
         try:
+            # Check if WebSocket is connected
+            if hasattr(self.websocket, 'client_state') and self.websocket.client_state.name != 'CONNECTED':
+                logger.warning(f"WebSocket not connected, skipping message: {message}")
+                return
+                
             if isinstance(message, dict):
                 await self.websocket.send_json(message)
             else:
                 await self.websocket.send_json(message.model_dump())
         except Exception as e:
             logger.error(f"Error sending message: {e}")
+            # Mark session as not running if WebSocket fails
+            if "WebSocket" in str(e) or "not connected" in str(e).lower():
+                self._running = False
+                
             
     async def handle_message(self, data: dict):
         """Handle incoming WebSocket message."""
@@ -186,18 +207,46 @@ class CallbackSessionManager:
     
     def __init__(self):
         self.sessions: Dict[str, CallbackChatSession] = {}
+        self.browser_sessions: Dict[str, str] = {}  # browser_session_id -> session_id
         self._lock = asyncio.Lock()
         logger.info("CallbackSessionManager initialized")
         
-    async def create_session(self, websocket: WebSocket) -> CallbackChatSession:
-        """Create a new chat session."""
-        session_id = str(uuid4())
-        session = CallbackChatSession(session_id, websocket)
+    async def create_or_get_session(self, websocket: WebSocket, browser_session_id: Optional[str] = None) -> tuple[CallbackChatSession, bool]:
+        """Create a new chat session or get existing one for browser session.
         
+        Returns:
+            Tuple of (session, is_new) where is_new indicates if this is a new session
+        """
         async with self._lock:
+            # Check if we have an existing session for this browser
+            if browser_session_id and browser_session_id in self.browser_sessions:
+                existing_session_id = self.browser_sessions[browser_session_id]
+                if existing_session_id in self.sessions:
+                    # Reuse existing session but update websocket for new connection
+                    session = self.sessions[existing_session_id]
+                    # Update the websocket to the new connection
+                    old_websocket = session.websocket
+                    session.websocket = websocket
+                    logger.info(f"Reusing session {existing_session_id} for browser {browser_session_id} - updated WebSocket")
+                    
+                    # Don't start a new task - the existing one is already running
+                    return session, False
+            
+            # Create new session only if no existing session found
+            session_id = str(uuid4())
+            session = CallbackChatSession(session_id, websocket)
             self.sessions[session_id] = session
             
-        logger.info(f"Created session: {session_id}")
+            # Track browser session if provided
+            if browser_session_id:
+                self.browser_sessions[browser_session_id] = session_id
+                
+        logger.info(f"Created new session: {session_id} for browser {browser_session_id}")
+        return session, True
+        
+    async def create_session(self, websocket: WebSocket) -> CallbackChatSession:
+        """Create a new chat session (backward compatibility)."""
+        session, _ = await self.create_or_get_session(websocket)
         return session
         
     async def get_session(self, session_id: str) -> Optional[CallbackChatSession]:
@@ -209,9 +258,17 @@ class CallbackSessionManager:
         async with self._lock:
             session = self.sessions.pop(session_id, None)
             
+            # Also remove browser session mapping
+            browser_session_id = None
+            for browser_id, sess_id in list(self.browser_sessions.items()):
+                if sess_id == session_id:
+                    browser_session_id = browser_id
+                    del self.browser_sessions[browser_id]
+                    break
+            
         if session:
             await session.stop()
-            logger.info(f"Removed session: {session_id}")
+            logger.info(f"Removed session: {session_id} (browser: {browser_session_id})")
             
     async def cleanup_all(self):
         """Stop and remove all sessions."""

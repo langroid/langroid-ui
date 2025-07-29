@@ -102,24 +102,29 @@ async def test_page():
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for chat sessions."""
     await websocket.accept()
-    logger.info("WebSocket connection accepted")
+    
+    # Get browser session ID from query params
+    browser_session_id = websocket.query_params.get("browser_session_id")
+    logger.info(f"WebSocket connection accepted - Browser session: {browser_session_id}")
     
     session = None
     try:
-        # Create session
-        session = await session_manager.create_session(websocket)
+        # Create or get existing session for browser
+        session, is_new = await session_manager.create_or_get_session(websocket, browser_session_id)
         
-        # Create agent - using mock LLM if no API key
-        agent = create_agent(
-            name="Assistant",
-            system_message="You are a helpful AI assistant powered by Langroid. Be concise and friendly."
-        )
+        if is_new:
+            # Only create agent and initialize for new sessions
+            # Create agent - using mock LLM if no API key
+            agent = create_agent(
+                name="Assistant",
+                system_message="You are a helpful AI assistant powered by Langroid. Be concise and friendly."
+            )
+            
+            # Initialize session with agent
+            await session.initialize(agent)
         
-        # Initialize session with agent
-        await session.initialize(agent)
-        
-        # Start the session
-        await session.start()
+        # Start the session (send_greeting only for new sessions)
+        await session.start(send_greeting=is_new)
         
         # Handle incoming messages
         while True:
@@ -147,9 +152,10 @@ async def websocket_endpoint(websocket: WebSocket):
         except:
             pass
     finally:
-        # Clean up session
+        # Don't immediately clean up session - let it persist for potential React StrictMode reconnection
+        # Session cleanup will happen via timeout or explicit cleanup
         if session:
-            await session_manager.remove_session(session.session_id)
+            logger.info(f"WebSocket closed for session {session.session_id}, keeping session alive for potential reconnection")
 
 
 if __name__ == "__main__":

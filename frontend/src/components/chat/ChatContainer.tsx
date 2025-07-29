@@ -4,6 +4,29 @@ import { ChatMessage } from './ChatMessage';
 import { ChatInput, type ChatInputRef } from './ChatInput';
 import { Loader2 } from 'lucide-react';
 
+// Generate a stable browser session ID that survives React StrictMode rerenders
+// Use a global variable to ensure same ID across renders in the same page load
+let globalBrowserSessionId = '';
+const getBrowserSessionId = () => {
+  const key = 'langroid-browser-session-id';
+  
+  // First check if we already have it in memory for this page load
+  if (globalBrowserSessionId) {
+    return globalBrowserSessionId;
+  }
+  
+  // Then check sessionStorage
+  let sessionId = sessionStorage.getItem(key);
+  if (!sessionId) {
+    sessionId = `browser-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    sessionStorage.setItem(key, sessionId);
+  }
+  
+  // Store in memory so both React StrictMode renders use the same ID
+  globalBrowserSessionId = sessionId;
+  return sessionId;
+};
+
 interface ChatContainerProps {
   sessionId?: string;
 }
@@ -29,7 +52,8 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
   // WebSocket connection
   useEffect(() => {
     try {
-      const ws = new WebSocket('ws://localhost:8000/ws');
+      const browserSessionId = getBrowserSessionId();
+      const ws = new WebSocket(`ws://localhost:8000/ws?browser_session_id=${browserSessionId}`);
       wsRef.current = ws;
 
       ws.onopen = () => {
