@@ -42,6 +42,7 @@ class CallbackContext:
     metadata: Dict[str, Any] = field(default_factory=dict)
     current_message_id: Optional[str] = None
     current_stream_id: Optional[str] = None
+    current_agent: Optional[Any] = None  # Reference to current agent
     
 
 
@@ -73,6 +74,9 @@ class WebSocketCallbacks:
         
     def attach_to_agent(self, agent: ChatAgent):
         """Attach callbacks to a Langroid agent."""
+        # Store reference to agent in context
+        self.context.current_agent = agent
+        
         # Ensure agent has callbacks namespace
         if not hasattr(agent, 'callbacks'):
             from types import SimpleNamespace
@@ -158,6 +162,13 @@ class WebSocketCallbacks:
             
         logger.info(f"Applied essential overrides: {self._overridden_methods}")
         
+        # Check if this is a StreamingChatAgent and enable token-level streaming
+        from .streaming_agent import StreamingChatAgent
+        if isinstance(agent, StreamingChatAgent):
+            logger.info("🌊 Detected StreamingChatAgent - streaming callbacks will be used!")
+        else:
+            logger.info("⚠️ Regular ChatAgent - no token-level streaming available")
+        
     # Streaming Callbacks
     
     def start_llm_stream(self, **kwargs) -> Callable[[str], None]:
@@ -178,6 +189,7 @@ class WebSocketCallbacks:
         
         def stream_token(token: str, event_type=None) -> None:
             """Handle individual stream token."""
+            logger.info(f"🌊 Received token: {repr(token[:20])}")
             self._streaming_tokens.append(token)
             token_msg = StreamToken(
                 message_id=message_id,
@@ -364,9 +376,9 @@ class WebSocketCallbacks:
             elif is_cached:
                 logger.debug("PRIMARY: Skipped cached message - already sent")
             else:
-                # Always send complete message for now - streaming callbacks not being triggered
+                # Always send complete message for now since streaming callbacks handle streaming separately
                 self._send_assistant_message(response.content)
-                logger.debug("PRIMARY: Sent complete message (streaming callbacks not triggered)")
+                logger.debug("PRIMARY: Sent complete message (non-cached response)")
             
         return response
         
@@ -387,9 +399,9 @@ class WebSocketCallbacks:
             elif is_cached:
                 logger.debug("ASYNC: Skipped cached message - already sent")
             else:
-                # Always send complete message for now - streaming callbacks not being triggered
+                # Always send complete message for now since streaming callbacks handle streaming separately
                 self._send_assistant_message(response.content)
-                logger.debug("ASYNC: Sent complete message (streaming callbacks not triggered)")
+                logger.debug("ASYNC: Sent complete message (non-cached response)")
             
         return response
         
