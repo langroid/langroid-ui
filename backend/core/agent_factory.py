@@ -44,7 +44,7 @@ def create_agent(
     if use_mock:
         logger.info("Creating agent with MockLM")
         llm_config = MockLMConfig(
-            stream=False,  # Disable streaming for callback compatibility
+            stream=True,  # Enable streaming
             response_dict={
                 "hello": "Hello! I'm a Langroid agent ready to help you. How can I assist you today?",
                 "hi": "Hi there! I'm your AI assistant powered by Langroid. What would you like to talk about?",
@@ -62,7 +62,7 @@ def create_agent(
         llm_config = OpenAIGPTConfig(
             chat_model=model,
             chat_context_length=16000,
-            stream=False,  # Disable streaming for callback compatibility
+            stream=True,  # Enable streaming
             temperature=0.7,
         )
     

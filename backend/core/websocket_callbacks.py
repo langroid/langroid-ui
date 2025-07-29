@@ -162,6 +162,7 @@ class WebSocketCallbacks:
     
     def start_llm_stream(self, **kwargs) -> Callable[[str], None]:
         """Start streaming callback - sync version."""
+        logger.info("🌊 start_llm_stream CALLED!")
         self._stream_started = True
         self._streaming_tokens = []
         message_id = str(uuid4())
@@ -173,6 +174,7 @@ class WebSocketCallbacks:
             sender="assistant"
         )
         self._queue_message(stream_start.dict())
+        logger.info(f"🌊 Sent stream_start message with ID: {message_id}")
         
         def stream_token(token: str, event_type=None) -> None:
             """Handle individual stream token."""
@@ -362,7 +364,9 @@ class WebSocketCallbacks:
             elif is_cached:
                 logger.debug("PRIMARY: Skipped cached message - already sent")
             else:
-                logger.debug("PRIMARY: Skipping complete message - will be streamed")
+                # Always send complete message for now - streaming callbacks not being triggered
+                self._send_assistant_message(response.content)
+                logger.debug("PRIMARY: Sent complete message (streaming callbacks not triggered)")
             
         return response
         
@@ -383,7 +387,9 @@ class WebSocketCallbacks:
             elif is_cached:
                 logger.debug("ASYNC: Skipped cached message - already sent")
             else:
-                logger.debug("ASYNC: Skipping complete message - will be streamed")
+                # Always send complete message for now - streaming callbacks not being triggered
+                self._send_assistant_message(response.content)
+                logger.debug("ASYNC: Sent complete message (streaming callbacks not triggered)")
             
         return response
         

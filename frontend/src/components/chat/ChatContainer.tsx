@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import type { Message } from '../../types';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput, type ChatInputRef } from './ChatInput';
-import { Loader2 } from 'lucide-react';
 
 // Generate a stable browser session ID that survives React StrictMode rerenders
 // Use a global variable to ensure same ID across renders in the same page load
@@ -224,8 +223,8 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
           )}
           {isLoading && (
             <div className="flex gap-3 px-4 py-2">
-              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
-                <Loader2 className="w-5 h-5 text-blue-600 animate-spin" />
+              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center">
+                <span className="text-white text-xs font-semibold">AI</span>
               </div>
               <div className="bg-gray-100 rounded-lg px-4 py-2">
                 <div className="flex gap-1">
