@@ -227,6 +227,11 @@ class CallbackSessionManager:
                     # Update the websocket to the new connection
                     old_websocket = session.websocket
                     session.websocket = websocket
+                    
+                    # Update the outgoing queue in callbacks to use new websocket
+                    if session.callbacks:
+                        session.callbacks.websocket = websocket
+                        
                     logger.info(f"Reusing session {existing_session_id} for browser {browser_session_id} - updated WebSocket")
                     
                     # Don't start a new task - the existing one is already running

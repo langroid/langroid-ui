@@ -39,6 +39,9 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const inputRef = useRef<ChatInputRef | null>(null);
+  
+  // Store message IDs in state so they persist across reconnections
+  const [messageIds, setMessageIds] = useState<Set<string>>(new Set());
 
   // Auto-scroll to bottom when new messages arrive
   const scrollToBottom = () => {
@@ -74,7 +77,11 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
               timestamp: new Date(data.message.timestamp),
             };
             
-            setMessages(prev => [...prev, message]);
+            // Deduplicate messages by ID
+            if (!messageIds.has(message.id)) {
+              setMessageIds(prev => new Set([...prev, message.id]));
+              setMessages(prev => [...prev, message]);
+            }
             setIsLoading(false);
             
             // Focus input after assistant message
@@ -82,16 +89,19 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
               setTimeout(() => inputRef.current?.focus(), 100);
             }
           } else if (data.type === 'stream_start') {
-            // Start a new streaming message
-            const message: Message = {
-              id: data.message_id,
-              content: '',
-              sender: data.sender || 'assistant',
-              timestamp: new Date(),
-            };
-            setMessages(prev => [...prev, message]);
-            setStreamingMessages(prev => new Map(prev).set(data.message_id, ''));
-            setIsLoading(false);
+            // Start a new streaming message (with deduplication)
+            if (!messageIds.has(data.message_id)) {
+              setMessageIds(prev => new Set([...prev, data.message_id]));
+              const message: Message = {
+                id: data.message_id,
+                content: '',
+                sender: data.sender || 'assistant',
+                timestamp: new Date(),
+              };
+              setMessages(prev => [...prev, message]);
+              setStreamingMessages(prev => new Map(prev).set(data.message_id, ''));
+              setIsLoading(false);
+            }
           } else if (data.type === 'stream_token') {
             // Add token to streaming message
             setStreamingMessages(prev => {
@@ -151,7 +161,11 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
       };
 
       return () => {
-        ws.close();
+        // Only close if WebSocket is actually open
+        // This prevents issues with React StrictMode
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close();
+        }
       };
     } catch (error) {
       console.error('Error creating WebSocket:', error);
