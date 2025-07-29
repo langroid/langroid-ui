@@ -7,12 +7,13 @@ that maximizes use of callbacks while falling back to method overrides
 only where necessary.
 """
 import asyncio
+import hashlib
 import json
 import logging
 import queue
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Union
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -57,6 +58,17 @@ class WebSocketCallbacks:
     2. Provides enhanced context management for callbacks
     3. Only overrides methods where callbacks are insufficient
     4. Handles sync/async bridging for WebSocket communication
+    5. Implements coordinated message deduplication to prevent triplication
+    
+    DEDUPLICATION STRATEGY:
+    - PRIMARY SENDER: _llm_response_messages_with_context (sync/async)
+      * This is the authoritative source for all LLM response messages
+      * Marks messages as sent using content hash tracking
+    - SECONDARY SENDERS: show_llm_response and finish_llm_stream callbacks
+      * Check if message was already sent by primary before sending
+      * Act as fallbacks only if primary didn't handle the message
+      * Log when messages are skipped due to deduplication
+    This approach reduces message triplication back to single messages.
     """
     
     def __init__(self, context: CallbackContext):
@@ -69,6 +81,11 @@ class WebSocketCallbacks:
         
         # Track which methods we've overridden
         self._overridden_methods = set()
+        
+        # Message deduplication tracking
+        self._sent_message_hashes: Set[str] = set()
+        self._current_response_content: Optional[str] = None
+        self._message_sent_by_primary = False
         
         logger.info(f"WebSocketCallbacks initialized for session {context.session_id}")
         
@@ -205,7 +222,7 @@ class WebSocketCallbacks:
         return self.start_llm_stream(**kwargs)
         
     def finish_llm_stream(self, content: str, **kwargs) -> None:
-        """Finish streaming and send complete message."""
+        """Finish streaming and send complete message (SECONDARY - checks for duplicates)."""
         if not self._stream_started:
             return
             
@@ -215,15 +232,27 @@ class WebSocketCallbacks:
         stream_end = StreamEnd(message_id=message_id)
         self._queue_message(stream_end.dict())
         
-        # Send complete message
-        complete_msg = CompleteMessage(
-            message=ChatMessage(
-                id=message_id,
-                content=content,
-                sender="assistant"
+        # Check if the primary sender has already sent this message
+        if content and content.strip():
+            if self._is_message_already_sent(content.strip()):
+                logger.info(f"🚫 SECONDARY: finish_llm_stream - complete message already sent by primary, skipping: {content[:50]}...")
+                self._stream_started = False
+                self.context.current_stream_id = None
+                return
+            
+            # If primary hasn't sent it, send complete message as fallback
+            complete_msg = CompleteMessage(
+                message=ChatMessage(
+                    id=message_id,
+                    content=content,
+                    sender="assistant"
+                )
             )
-        )
-        self._queue_message(complete_msg.dict())
+            self._queue_message(complete_msg.dict())
+            self._mark_message_as_sent(content.strip())
+            logger.info(f"⚠️ FALLBACK: finish_llm_stream sent complete message (primary didn't handle): {content[:50]}...")
+        else:
+            logger.debug("finish_llm_stream: Empty content, skipping complete message")
         
         self._stream_started = False
         self.context.current_stream_id = None
@@ -239,11 +268,16 @@ class WebSocketCallbacks:
     # Display Callbacks
     
     def show_llm_response(self, content: str, is_tool: bool = False, cached: bool = False, **kwargs) -> None:
-        """Show LLM response - called for non-streaming responses."""
+        """Show LLM response - called for non-streaming responses (SECONDARY - checks for duplicates)."""
         logger.info(f"🎯 show_llm_response CALLED! content={content[:50] if content else 'None'}, cached={cached}")
         
-        # Since we're using pure callbacks, we MUST send the message here
-        if content:
+        # Check if the primary sender has already sent this message
+        if content and content.strip():
+            if self._is_message_already_sent(content.strip()):
+                logger.info(f"🚫 SECONDARY: show_llm_response - message already sent by primary, skipping: {content[:50]}...")
+                return
+            
+            # If primary hasn't sent it yet, send it as fallback
             message = CompleteMessage(
                 message=ChatMessage(
                     id=str(uuid4()),
@@ -252,7 +286,10 @@ class WebSocketCallbacks:
                 )
             )
             self._queue_message(message.dict())
-            logger.info(f"✅ Queued LLM response message for sending")
+            self._mark_message_as_sent(content.strip())
+            logger.info(f"⚠️ FALLBACK: show_llm_response sent message (primary didn't handle): {content[:50]}...")
+        else:
+            logger.debug("show_llm_response: Empty content, skipping")
         
     def show_agent_response(self, content: str, language: str = None, **kwargs) -> None:
         """Show agent response (tool results, etc)."""
@@ -315,13 +352,18 @@ class WebSocketCallbacks:
         """Override for llm_response."""
         logger.info("🔧 _llm_response_with_context called")
         
-        # Reset cached message flag at the start of a new response cycle
+        # Reset deduplication state at the start of a new response cycle
+        self._reset_deduplication_state()
         self._cached_message_sent = False
         
         # Track if streaming is being used
         self._stream_started = False
         
         response = agent._original_llm_response(*args, **kwargs)
+        
+        # Store current response content for deduplication
+        if response and hasattr(response, 'content'):
+            self._current_response_content = response.content
         
         # Don't send anything here - let llm_response_messages handle it
         logger.info("SYNC: llm_response completed, not sending message here")
@@ -332,19 +374,20 @@ class WebSocketCallbacks:
         """Override for llm_response_async."""
         logger.info("🔧 _llm_response_async_with_context called")
         
+        # Reset deduplication state at the start of a new response cycle
+        self._reset_deduplication_state()
+        
         # Track if streaming is being used
         self._stream_started = False
         
         response = await agent._original_llm_response_async(*args, **kwargs)
         
-        # Only send complete message if it's cached
-        if response and response.content:
-            is_cached = hasattr(response, 'metadata') and getattr(response.metadata, 'cached', False)
-            if is_cached:
-                self._send_assistant_message(response.content)
-                logger.info(f"ASYNC: Sent complete message for cached response")
-            else:
-                logger.info(f"ASYNC: Skipped complete message - will be streamed")
+        # Store current response content for deduplication
+        if response and hasattr(response, 'content'):
+            self._current_response_content = response.content
+        
+        # Don't send messages here - let the primary sender handle it
+        logger.info("ASYNC: llm_response_async completed, not sending message here")
             
         return response
         
@@ -360,48 +403,64 @@ class WebSocketCallbacks:
         )
     
     def _llm_response_messages_with_context(self, agent: ChatAgent, *args, **kwargs):
-        """Override for llm_response_messages to add context."""
-        logger.info("🔧 _llm_response_messages_with_context called")
+        """Override for llm_response_messages to add context - PRIMARY MESSAGE SENDER."""
+        logger.info("🔧 _llm_response_messages_with_context called (PRIMARY SENDER)")
         
         # Call original method
         response = agent._original_llm_response_messages(*args, **kwargs)
         
-        # This is the primary method for sending messages
+        # This is the PRIMARY and AUTHORITATIVE method for sending messages
         if response and hasattr(response, 'content') and response.content:
+            content = response.content.strip()
+            
+            # Check if we've already sent this message
+            if self._is_message_already_sent(content):
+                logger.info(f"🚫 PRIMARY: Message already sent, skipping duplicate: {content[:50]}...")
+                return response
+            
+            # Send the message and mark as sent by primary
+            self._send_assistant_message(content)
+            self._mark_message_as_sent(content)
+            self._message_sent_by_primary = True
+            
+            # Update cached message tracking
             is_cached = hasattr(response, 'metadata') and getattr(response.metadata, 'cached', False)
-            if is_cached and not self._cached_message_sent:
-                self._send_assistant_message(response.content)
+            if is_cached:
                 self._cached_message_sent = True
-                logger.debug("PRIMARY: Sent complete message for cached response")
-            elif is_cached:
-                logger.debug("PRIMARY: Skipped cached message - already sent")
+                logger.info(f"✅ PRIMARY: Sent complete message for cached response: {content[:50]}...")
             else:
-                # Always send complete message for now since streaming callbacks handle streaming separately
-                self._send_assistant_message(response.content)
-                logger.debug("PRIMARY: Sent complete message (non-cached response)")
+                logger.info(f"✅ PRIMARY: Sent complete message (non-cached response): {content[:50]}...")
             
         return response
         
     async def _llm_response_messages_async_with_context(self, agent: ChatAgent, *args, **kwargs):
-        """Override for llm_response_messages_async."""
-        logger.info("🔧 _llm_response_messages_async_with_context called")
+        """Override for llm_response_messages_async - PRIMARY MESSAGE SENDER (async)."""
+        logger.info("🔧 _llm_response_messages_async_with_context called (PRIMARY SENDER ASYNC)")
         
         # Call original method
         response = await agent._original_llm_response_messages_async(*args, **kwargs)
         
-        # Only send complete message if it's cached AND not already sent
+        # This is the PRIMARY and AUTHORITATIVE method for sending messages (async version)
         if response and hasattr(response, 'content') and response.content:
+            content = response.content.strip()
+            
+            # Check if we've already sent this message
+            if self._is_message_already_sent(content):
+                logger.info(f"🚫 PRIMARY ASYNC: Message already sent, skipping duplicate: {content[:50]}...")
+                return response
+            
+            # Send the message and mark as sent by primary
+            self._send_assistant_message(content)
+            self._mark_message_as_sent(content)
+            self._message_sent_by_primary = True
+            
+            # Update cached message tracking
             is_cached = hasattr(response, 'metadata') and getattr(response.metadata, 'cached', False)
-            if is_cached and not self._cached_message_sent:
-                self._send_assistant_message(response.content)
+            if is_cached:
                 self._cached_message_sent = True
-                logger.debug("ASYNC: Sent complete message for cached response")
-            elif is_cached:
-                logger.debug("ASYNC: Skipped cached message - already sent")
+                logger.info(f"✅ PRIMARY ASYNC: Sent complete message for cached response: {content[:50]}...")
             else:
-                # Always send complete message for now since streaming callbacks handle streaming separately
-                self._send_assistant_message(response.content)
-                logger.debug("ASYNC: Sent complete message (non-cached response)")
+                logger.info(f"✅ PRIMARY ASYNC: Sent complete message (non-cached response): {content[:50]}...")
             
         return response
         
@@ -415,6 +474,31 @@ class WebSocketCallbacks:
         return response
         
     # Utility Methods
+    
+    def _get_message_hash(self, content: str) -> str:
+        """Generate a hash for message content to track duplicates."""
+        return hashlib.sha256(content.encode('utf-8')).hexdigest()[:16]
+    
+    def _is_message_already_sent(self, content: str) -> bool:
+        """Check if a message with this content has already been sent."""
+        if not content or not content.strip():
+            return True  # Don't send empty messages
+        
+        message_hash = self._get_message_hash(content.strip())
+        return message_hash in self._sent_message_hashes
+    
+    def _mark_message_as_sent(self, content: str) -> None:
+        """Mark a message as sent to prevent duplicates."""
+        if content and content.strip():
+            message_hash = self._get_message_hash(content.strip())
+            self._sent_message_hashes.add(message_hash)
+            logger.debug(f"📝 Marked message as sent: {message_hash}")
+    
+    def _reset_deduplication_state(self) -> None:
+        """Reset deduplication state for a new response cycle."""
+        self._current_response_content = None
+        self._message_sent_by_primary = False
+        logger.debug("🔄 Reset deduplication state for new response cycle")
     
     def _send_assistant_message(self, content: str):
         """Send an assistant message to the UI."""
@@ -462,6 +546,10 @@ class WebSocketCallbacks:
             
     def detach_from_agent(self, agent: ChatAgent):
         """Detach callbacks and restore original methods."""
+        # Log deduplication statistics before detaching
+        logger.info(f"📊 Deduplication stats for session {self.context.session_id}: "
+                   f"tracked {len(self._sent_message_hashes)} unique messages")
+        
         # Restore overridden methods
         if 'llm_response_messages' in self._overridden_methods:
             if hasattr(agent, '_original_llm_response_messages'):
