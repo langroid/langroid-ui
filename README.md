@@ -1,10 +1,10 @@
 # Langroid Chat UI
 
-A modern web-based chat interface for Langroid agents, featuring real-time streaming responses and WebSocket communication.
+A proof-of-concept implementation demonstrating WebSocket-based UI integration with Langroid agents using native callbacks and streaming capabilities.
 
 ## Overview
 
-This project provides a production-ready web UI for interacting with Langroid agents through a browser. It demonstrates how to properly integrate Langroid's callback system with modern web technologies to create a ChatGPT-like experience.
+This project serves as a reference implementation for integrating Langroid's agent framework with modern web frontends. It showcases how to leverage Langroid's callback system to build real-time, streaming chat interfaces without requiring modifications to Langroid's core architecture. The implementation provides a foundation for developers looking to create web-based applications powered by Langroid agents.
 
 ## Features
 
