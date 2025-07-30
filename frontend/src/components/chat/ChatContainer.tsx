@@ -34,10 +34,11 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
-  const [streamingMessages, setStreamingMessages] = useState<Map<string, string>>(new Map());
+  const [_streamingMessages, setStreamingMessages] = useState<Map<string, string>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const inputRef = useRef<ChatInputRef | null>(null);
+  const connectionRef = useRef<boolean>(false);
   
   // Store message IDs in state so they persist across reconnections AND React re-mounts
   const getPersistedMessageIds = (): Set<string> => {
@@ -54,12 +55,17 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
   };
 
   const [messageIds, setMessageIds] = useState<Set<string>>(getPersistedMessageIds);
+  
+  // Use a ref for synchronous deduplication to prevent race conditions
+  const messageIdsRef = useRef<Set<string>>(getPersistedMessageIds());
 
   // Persist message IDs to sessionStorage whenever they change
   useEffect(() => {
     try {
       const idsArray = Array.from(messageIds);
       sessionStorage.setItem('langroid_message_ids', JSON.stringify(idsArray));
+      // Keep ref in sync
+      messageIdsRef.current = new Set(messageIds);
     } catch (error) {
       console.warn('Failed to persist message IDs:', error);
     }
@@ -76,8 +82,16 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
 
   // WebSocket connection
   useEffect(() => {
+    // Prevent duplicate connections
+    if (connectionRef.current) {
+      console.log('WebSocket connection already exists, skipping');
+      return;
+    }
+    
     try {
+      connectionRef.current = true;
       const browserSessionId = getBrowserSessionId();
+      console.log(`Creating WebSocket connection for browser session: ${browserSessionId}`);
       const ws = new WebSocket(`ws://localhost:8000/ws?browser_session_id=${browserSessionId}`);
       wsRef.current = ws;
 
@@ -99,10 +113,14 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
               timestamp: new Date(data.message.timestamp),
             };
             
-            // Deduplicate messages by ID
-            if (!messageIds.has(message.id)) {
+            // Deduplicate messages by ID using ref for synchronous check
+            if (!messageIdsRef.current.has(message.id)) {
+              console.log(`📥 New message: ${message.id} - ${message.content.substring(0, 50)}...`);
+              messageIdsRef.current.add(message.id);
               setMessageIds(prev => new Set([...prev, message.id]));
               setMessages(prev => [...prev, message]);
+            } else {
+              console.warn(`🚫 Duplicate message blocked: ${message.id} - ${message.content.substring(0, 50)}...`);
             }
             setIsLoading(false);
             
@@ -111,8 +129,9 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
               setTimeout(() => inputRef.current?.focus(), 100);
             }
           } else if (data.type === 'stream_start') {
-            // Start a new streaming message (with deduplication)
-            if (!messageIds.has(data.message_id)) {
+            // Start a new streaming message (with synchronous deduplication)
+            if (!messageIdsRef.current.has(data.message_id)) {
+              messageIdsRef.current.add(data.message_id);
               setMessageIds(prev => new Set([...prev, data.message_id]));
               const message: Message = {
                 id: data.message_id,
@@ -175,6 +194,7 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
 
       ws.onclose = () => {
         setIsConnected(false);
+        connectionRef.current = false; // Allow reconnection after close
       };
 
       ws.onerror = (error) => {

@@ -9,7 +9,6 @@ interface ChatMessageProps {
 
 export function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.sender === 'user';
-  const isSystem = message.sender === 'system';
   
   return (
     <div className={clsx(
@@ -28,7 +27,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
           ? 'bg-blue-500 text-white' 
           : 'bg-gray-100 text-gray-900'
       )}>
-        {isUser || isSystem ? (
+        {isUser ? (
           <p className="whitespace-pre-wrap break-words">{message.content}</p>
         ) : (
           <div className="prose prose-sm max-w-none">

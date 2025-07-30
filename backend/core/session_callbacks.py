@@ -352,6 +352,15 @@ class CallbackSessionManager:
                     
                     # Clear stale user input and update WebSocket state
                     session._clear_stale_user_input()
+                    
+                    # Clear any stale messages in the outgoing queue
+                    while not session.outgoing_queue.empty():
+                        try:
+                            session.outgoing_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                    logger.info(f"Cleared outgoing queue for session {existing_session_id}")
+                    
                     session.set_websocket_state(WebSocketState.CONNECTED)
                         
                     logger.info(f"Reusing session {existing_session_id} for browser {browser_session_id} - updated WebSocket and cleared stale input")
