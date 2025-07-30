@@ -54,23 +54,26 @@ This will:
 ## Installation
 
 ### Prerequisites
-- Python 3.8+
+- Python 3.11+ (as specified in pyproject.toml)
 - Node.js 16+
 - UV (recommended) or pip for Python packages
 
 ### Backend Setup
 
+The project uses `pyproject.toml` for dependency management, which ensures all required packages (FastAPI, Langroid, etc.) are installed with compatible versions.
+
 ```bash
+# Using UV (recommended) - installs from pyproject.toml
+uv sync
+
+# Or using pip with pyproject.toml
+pip install -e .
+
+# Alternative: install from requirements.txt
 cd backend
-
-# Using UV (recommended)
-uv venv
-uv pip install -r requirements.txt
-
-# Or using pip
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+uv pip install -r requirements.txt  # with UV
+# or
+pip install -r requirements.txt  # with pip
 ```
 
 ### Frontend Setup

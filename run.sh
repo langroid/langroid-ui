@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Simple script to run the Langroid Chat UI
+# Run the Langroid Chat UI
 
 echo "🚀 Starting Langroid Chat UI..."
 echo ""
@@ -56,7 +56,7 @@ echo ""
 
 # Kill any existing processes
 echo "Cleaning up any existing processes..."
-pkill -f "python.*main.py" || true
+pkill -f "python.*main_with_callbacks.py" || true
 pkill -f "vite" || true
 sleep 2
 
@@ -67,10 +67,10 @@ cd backend
 # Check if UV is available and use it if present
 if command -v uv &> /dev/null; then
     echo "Using UV to run backend..."
-    uv run python main.py &
+    uv run python main_with_callbacks.py &
 else
     echo "UV not found, using Python directly..."
-    python main.py &
+    python main_with_callbacks.py &
 fi
 
 BACKEND_PID=$!
@@ -115,7 +115,7 @@ cleanup() {
     echo "Shutting down servers..."
     kill $BACKEND_PID 2>/dev/null
     kill $FRONTEND_PID 2>/dev/null
-    pkill -f "python.*main.py" || true
+    pkill -f "python.*main_with_callbacks.py" || true
     pkill -f "vite" || true
     echo "Goodbye! 👋"
     exit 0
