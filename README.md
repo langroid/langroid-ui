@@ -64,16 +64,20 @@ The project uses `pyproject.toml` for dependency management, which ensures all r
 
 ```bash
 # Using UV (recommended) - installs from pyproject.toml
+uv venv --python 3.11
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv sync
 
 # Or using pip with pyproject.toml
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -e .
 
 # Alternative: install from requirements.txt
 cd backend
-uv pip install -r requirements.txt  # with UV
-# or
-pip install -r requirements.txt  # with pip
+uv venv --python 3.11
+source ../.venv/bin/activate  # On Windows: ..\.venv\Scripts\activate
+uv pip install -r requirements.txt
 ```
 
 ### Frontend Setup
