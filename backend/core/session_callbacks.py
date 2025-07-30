@@ -14,7 +14,7 @@ from langroid.agent.chat_agent import ChatAgent
 from langroid.agent.task import Task
 
 from .websocket_callbacks import create_websocket_callbacks, WebSocketCallbacks
-# from .streaming_agent import StreamingChatAgent, create_streaming_agent
+from .streaming_agent import StreamingChatAgent, create_streaming_agent
 from models.messages import ConnectionStatus
 
 logger = logging.getLogger(__name__)

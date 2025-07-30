@@ -28,7 +28,7 @@ load_dotenv()
 # Import our callback-based session manager
 from core.session_callbacks import CallbackSessionManager
 from core.agent_factory import create_agent
-# from core.streaming_agent import create_streaming_agent
+from core.streaming_agent import create_streaming_agent
 from models.messages import ConnectionStatus
 
 # Configure logging
@@ -115,8 +115,8 @@ async def websocket_endpoint(websocket: WebSocket):
         
         if is_new:
             # Only create agent and initialize for new sessions
-            # Create regular agent - using mock LLM if no API key
-            agent = create_agent(
+            # Create streaming agent - using mock LLM if no API key
+            agent = create_streaming_agent(
                 name="Assistant",
                 system_message="You are a helpful AI assistant powered by Langroid. Be concise and friendly."
             )
