@@ -46,15 +46,16 @@ def create_agent(
         llm_config = MockLMConfig(
             stream=True,  # Enable streaming
             response_dict={
-                "hello": "Hello! I'm a Langroid agent ready to help you. How can I assist you today?",
-                "hi": "Hi there! I'm your AI assistant powered by Langroid. What would you like to talk about?",
-                "help": "I can help you with:\n• General conversation\n• Answering questions\n• Problem solving\n• Code assistance\n• And much more!\n\nWhat would you like to explore?",
-                "test": "Great! The chat interface is working perfectly. I'm receiving your messages and responding through the WebSocket connection.",
-                "langroid": "Langroid is the powerful framework that enables me to have this conversation with you! It provides:\n• Agent-based architecture\n• Tool usage capabilities\n• Multi-agent orchestration\n• And seamless web integration like you're experiencing now!",
-                "bye|goodbye": "Goodbye! It was great chatting with you. Feel free to return anytime!",
-                "default": "I understand. I'm here to help with whatever you need. Feel free to ask me anything!"
+                "hello": "Mock LLM: Hello! I'm a Langroid agent ready to help you. How can I assist you today?",
+                "hi": "Mock LLM: Hi there! I'm your AI assistant powered by Langroid. What would you like to talk about?",
+                "help": "Mock LLM: I can help you with:\n• General conversation\n• Answering questions\n• Problem solving\n• Code assistance\n• And much more!\n\nWhat would you like to explore?",
+                "test": "Mock LLM: Great! The chat interface is working perfectly. I'm receiving your messages and responding through the WebSocket connection.",
+                "langroid": "Mock LLM: Langroid is the powerful framework that enables me to have this conversation with you! It provides:\n• Agent-based architecture\n• Tool usage capabilities\n• Multi-agent orchestration\n• And seamless web integration like you're experiencing now!",
+                "bye|goodbye": "Mock LLM: Goodbye! It was great chatting with you. Feel free to return anytime!",
+                "what's up|whats up|what is up|sup": "Mock LLM: Not much! Just here ready to chat and help with whatever you need. What's on your mind?",
+                "default": "Mock LLM: I understand. I'm here to help with whatever you need. Feel free to ask me anything!"
             },
-            default_response="I'm here to help! As a Langroid-powered assistant, I can engage in conversations on many topics."
+            default_response="Mock LLM: I'm here to help! As a Langroid-powered assistant, I can engage in conversations on many topics."
         )
     else:
         logger.info("Creating agent with OpenAI GPT")

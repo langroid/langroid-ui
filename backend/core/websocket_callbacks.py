@@ -631,7 +631,9 @@ class WebSocketCallbacks:
         """Reset deduplication state for a new response cycle."""
         self._current_response_content = None
         self._message_sent_by_primary = False
-        logger.debug("🔄 Reset deduplication state for new response cycle")
+        # Clear message hashes to allow legitimate duplicate responses (e.g., MockLM same responses)
+        self._sent_message_hashes.clear()
+        logger.debug("🔄 Reset deduplication state for new response cycle, cleared message hashes")
     
     def _send_assistant_message(self, content: str):
         """Send an assistant message to the UI with detailed logging."""
@@ -667,13 +669,13 @@ class WebSocketCallbacks:
         msg_id = message.get('id', 'no-id')
         content_preview = str(message.get('content', ''))[:50] + '...' if len(str(message.get('content', ''))) > 50 else str(message.get('content', ''))
         
-        logger.error(f"🔥 WEBSOCKET QUEUE: type={msg_type}, id={msg_id}, content='{content_preview}'")
-        logger.error(f"🔥 FULL MESSAGE: {message}")
+        logger.debug(f"🔥 WEBSOCKET QUEUE: type={msg_type}, id={msg_id}, content='{content_preview}'")
+        logger.debug(f"🔥 FULL MESSAGE: {message}")
         
         # Also log the call stack to see where this is coming from
         import traceback
         stack_trace = ''.join(traceback.format_stack()[-3:-1])  # Last 2 frames before this
-        logger.error(f"🔥 CALL STACK:\n{stack_trace}")
+        logger.debug(f"🔥 CALL STACK:\n{stack_trace}")
         """Queue a message for WebSocket delivery with ultra-detailed logging."""
         import json
         from datetime import datetime
