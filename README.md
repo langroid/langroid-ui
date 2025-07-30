@@ -1,6 +1,8 @@
 # Langroid Chat UI
 
-A simple proof-of-concept demonstrating WebSocket-based UI integration with Langroid for basic single-agent, single-task chat scenarios.
+A simple proof-of-concept demonstrating WebSocket-based UI integration with [Langroid](https://github.com/langroid/langroid) for basic single-agent, single-task chat scenarios.
+
+[Langroid](https://github.com/langroid/langroid) is an intuitive, lightweight, extensible and principled Python framework to easily build LLM-powered applications using a multi-agent programming paradigm.
 
 ## Overview
 
