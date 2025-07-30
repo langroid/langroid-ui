@@ -1,10 +1,16 @@
 # Langroid Chat UI
 
-A proof-of-concept implementation demonstrating WebSocket-based UI integration with Langroid agents using native callbacks and streaming capabilities.
+A simple proof-of-concept demonstrating WebSocket-based UI integration with Langroid for basic single-agent, single-task chat scenarios.
 
 ## Overview
 
-This project serves as a reference implementation for integrating Langroid's agent framework with modern web frontends. It showcases how to leverage Langroid's callback system to build real-time, streaming chat interfaces without requiring modifications to Langroid's core architecture. The implementation provides a foundation for developers looking to create web-based applications powered by Langroid agents.
+This project demonstrates a basic integration between Langroid agents and a web frontend using WebSockets. **Important limitations**: This implementation is designed for simple single-agent, single-task scenarios and is not expected to work reliably with:
+- Complex multi-agent systems
+- Task delegation or hierarchical task structures  
+- Tool usage and function calling
+- Advanced Langroid features
+
+For this integration to work with arbitrary Langroid applications, additional callbacks would need to be implemented within Langroid itself. See `issues/langroid-callback-enhancement-proposal.md` for details on the required enhancements.
 
 ## Features
 
