@@ -224,24 +224,46 @@ class WebSocketCallbacks:
         
     def finish_llm_stream(self, content: str, **kwargs) -> None:
         """Finish streaming and send complete message (SECONDARY - checks for duplicates)."""
+        stream_trace_id = str(uuid4())[:8]
+        logger.info(f"🌊 STREAM[{stream_trace_id}]: finish_llm_stream CALLED! content={content[:50] if content else 'None'}, stream_started={self._stream_started}")
+        logger.info(f"🌊 STREAM[{stream_trace_id}]: kwargs: {kwargs}")
+        logger.info(f"🌊 STREAM[{stream_trace_id}]: Current stream_id: {self.context.current_stream_id}")
+        logger.info(f"🌊 STREAM[{stream_trace_id}]: Current dedup state - sent_hashes: {len(self._sent_message_hashes)}, message_sent_by_primary: {self._message_sent_by_primary}")
+        
         if not self._stream_started:
+            logger.info(f"⚠️ STREAM[{stream_trace_id}]: Stream not started, returning early")
             return
             
         message_id = self.context.current_stream_id
+        logger.info(f"🌊 STREAM[{stream_trace_id}]: Using message_id: {message_id}")
         
         # Send stream end
+        logger.info(f"🔚 STREAM[{stream_trace_id}]: Sending stream end message")
         stream_end = StreamEnd(message_id=message_id)
         self._queue_message(stream_end.dict())
         
         # Check if the primary sender has already sent this message
         if content and content.strip():
-            if self._is_message_already_sent(content.strip()):
-                logger.info(f"🚫 SECONDARY: finish_llm_stream - complete message already sent by primary, skipping: {content[:50]}...")
+            content_stripped = content.strip()
+            content_hash = self._get_message_hash(content_stripped)
+            
+            logger.info(f"📝 STREAM[{stream_trace_id}]: Processing content: {content[:100]}...")
+            logger.info(f"📝 STREAM[{stream_trace_id}]: Content hash: {content_hash}")
+            logger.info(f"📝 STREAM[{stream_trace_id}]: Content length: {len(content_stripped)}")
+            
+            already_sent = self._is_message_already_sent(content_stripped)
+            logger.info(f"🔍 STREAM[{stream_trace_id}]: Already sent check: {already_sent}")
+            logger.info(f"🔍 STREAM[{stream_trace_id}]: Current sent hashes: {self._sent_message_hashes}")
+            
+            if already_sent:
+                logger.info(f"🚫 STREAM[{stream_trace_id}]: finish_llm_stream - complete message already sent by primary, skipping: {content[:50]}...")
                 self._stream_started = False
                 self.context.current_stream_id = None
+                logger.info(f"🏁 STREAM[{stream_trace_id}]: finish_llm_stream finished (skipped duplicate)")
                 return
             
             # If primary hasn't sent it, send complete message as fallback
+            logger.info(f"🚀 STREAM[{stream_trace_id}]: Primary didn't send message, sending complete message as fallback")
             complete_msg = CompleteMessage(
                 message=ChatMessage(
                     id=message_id,
@@ -249,14 +271,17 @@ class WebSocketCallbacks:
                     sender="assistant"
                 )
             )
+            logger.info(f"📦 STREAM[{stream_trace_id}]: Created fallback complete message with ID: {message_id}")
             self._queue_message(complete_msg.dict())
-            self._mark_message_as_sent(content.strip())
-            logger.info(f"⚠️ FALLBACK: finish_llm_stream sent complete message (primary didn't handle): {content[:50]}...")
+            logger.info(f"📌 STREAM[{stream_trace_id}]: Marking message as sent")
+            self._mark_message_as_sent(content_stripped)
+            logger.info(f"⚠️ STREAM[{stream_trace_id}]: FALLBACK - finish_llm_stream sent complete message (primary didn't handle): {content[:50]}...")
         else:
-            logger.debug("finish_llm_stream: Empty content, skipping complete message")
+            logger.info(f"⚠️ STREAM[{stream_trace_id}]: Empty content, skipping complete message")
         
         self._stream_started = False
         self.context.current_stream_id = None
+        logger.info(f"🏁 STREAM[{stream_trace_id}]: finish_llm_stream finished")
         
     def cancel_llm_stream(self) -> None:
         """Cancel streaming (e.g., when cached response found)."""
@@ -270,27 +295,47 @@ class WebSocketCallbacks:
     
     def show_llm_response(self, content: str, is_tool: bool = False, cached: bool = False, **kwargs) -> None:
         """Show LLM response - called for non-streaming responses (SECONDARY - checks for duplicates)."""
-        logger.info(f"🎯 show_llm_response CALLED! content={content[:50] if content else 'None'}, cached={cached}")
+        secondary_trace_id = str(uuid4())[:8]
+        logger.info(f"🎯 SECONDARY[{secondary_trace_id}]: show_llm_response CALLED! content={content[:50] if content else 'None'}, is_tool={is_tool}, cached={cached}")
+        logger.info(f"🎯 SECONDARY[{secondary_trace_id}]: kwargs: {kwargs}")
+        logger.info(f"🎯 SECONDARY[{secondary_trace_id}]: Current dedup state - sent_hashes: {len(self._sent_message_hashes)}, message_sent_by_primary: {self._message_sent_by_primary}")
         
         # Check if the primary sender has already sent this message
         if content and content.strip():
-            if self._is_message_already_sent(content.strip()):
-                logger.info(f"🚫 SECONDARY: show_llm_response - message already sent by primary, skipping: {content[:50]}...")
+            content_stripped = content.strip()
+            content_hash = self._get_message_hash(content_stripped)
+            
+            logger.info(f"📝 SECONDARY[{secondary_trace_id}]: Processing content: {content[:100]}...")
+            logger.info(f"📝 SECONDARY[{secondary_trace_id}]: Content hash: {content_hash}")
+            logger.info(f"📝 SECONDARY[{secondary_trace_id}]: Content length: {len(content_stripped)}")
+            
+            already_sent = self._is_message_already_sent(content_stripped)
+            logger.info(f"🔍 SECONDARY[{secondary_trace_id}]: Already sent check: {already_sent}")
+            logger.info(f"🔍 SECONDARY[{secondary_trace_id}]: Current sent hashes: {self._sent_message_hashes}")
+            
+            if already_sent:
+                logger.info(f"🚫 SECONDARY[{secondary_trace_id}]: show_llm_response - message already sent by primary, skipping: {content[:50]}...")
                 return
             
             # If primary hasn't sent it yet, send it as fallback
+            logger.info(f"🚀 SECONDARY[{secondary_trace_id}]: Primary didn't send message, sending as fallback")
+            message_id = str(uuid4())
             message = CompleteMessage(
                 message=ChatMessage(
-                    id=str(uuid4()),
+                    id=message_id,
                     content=content,
                     sender="assistant"
                 )
             )
+            logger.info(f"📦 SECONDARY[{secondary_trace_id}]: Created fallback message with ID: {message_id}")
             self._queue_message(message.dict())
-            self._mark_message_as_sent(content.strip())
-            logger.info(f"⚠️ FALLBACK: show_llm_response sent message (primary didn't handle): {content[:50]}...")
+            logger.info(f"📌 SECONDARY[{secondary_trace_id}]: Marking message as sent")
+            self._mark_message_as_sent(content_stripped)
+            logger.info(f"⚠️ SECONDARY[{secondary_trace_id}]: FALLBACK - show_llm_response sent message (primary didn't handle): {content[:50]}...")
         else:
-            logger.debug("show_llm_response: Empty content, skipping")
+            logger.info(f"⚠️ SECONDARY[{secondary_trace_id}]: Empty content, skipping")
+            
+        logger.info(f"🏁 SECONDARY[{secondary_trace_id}]: show_llm_response finished")
         
     def show_agent_response(self, content: str, language: str = None, **kwargs) -> None:
         """Show agent response (tool results, etc)."""
@@ -414,64 +459,106 @@ class WebSocketCallbacks:
     
     def _llm_response_messages_with_context(self, agent: ChatAgent, *args, **kwargs):
         """Override for llm_response_messages to add context - PRIMARY MESSAGE SENDER."""
-        logger.info("🔧 _llm_response_messages_with_context called (PRIMARY SENDER)")
+        primary_trace_id = str(uuid4())[:8]
+        logger.info(f"🔧 PRIMARY[{primary_trace_id}]: _llm_response_messages_with_context called (SYNC)")
+        logger.info(f"🔧 PRIMARY[{primary_trace_id}]: Args: {args}, Kwargs: {kwargs}")
+        logger.info(f"🔧 PRIMARY[{primary_trace_id}]: Agent: {agent.config.name}")
+        logger.info(f"🔧 PRIMARY[{primary_trace_id}]: Current dedup state - sent_hashes: {len(self._sent_message_hashes)}, message_sent_by_primary: {self._message_sent_by_primary}")
         
         # Call original method
+        logger.info(f"⚙️ PRIMARY[{primary_trace_id}]: Calling original method...")
         response = agent._original_llm_response_messages(*args, **kwargs)
+        logger.info(f"⚙️ PRIMARY[{primary_trace_id}]: Original method returned: {type(response)}, has_content: {hasattr(response, 'content') if response else False}")
         
         # This is the PRIMARY and AUTHORITATIVE method for sending messages
         if response and hasattr(response, 'content') and response.content:
             content = response.content.strip()
+            content_hash = self._get_message_hash(content)
+            
+            logger.info(f"📝 PRIMARY[{primary_trace_id}]: Processing response content: {content[:100]}...")
+            logger.info(f"📝 PRIMARY[{primary_trace_id}]: Content hash: {content_hash}")
+            logger.info(f"📝 PRIMARY[{primary_trace_id}]: Content length: {len(content)}")
             
             # Check if we've already sent this message
-            if self._is_message_already_sent(content):
-                logger.info(f"🚫 PRIMARY: Message already sent, skipping duplicate: {content[:50]}...")
+            already_sent = self._is_message_already_sent(content)
+            logger.info(f"🔍 PRIMARY[{primary_trace_id}]: Already sent check: {already_sent}")
+            logger.info(f"🔍 PRIMARY[{primary_trace_id}]: Current sent hashes: {self._sent_message_hashes}")
+            
+            if already_sent:
+                logger.info(f"🚫 PRIMARY[{primary_trace_id}]: Message already sent, skipping duplicate: {content[:50]}...")
                 return response
             
             # Send the message and mark as sent by primary
+            logger.info(f"🚀 PRIMARY[{primary_trace_id}]: Sending assistant message via _send_assistant_message")
             self._send_assistant_message(content)
+            logger.info(f"📌 PRIMARY[{primary_trace_id}]: Marking message as sent")
             self._mark_message_as_sent(content)
             self._message_sent_by_primary = True
             
             # Update cached message tracking
             is_cached = hasattr(response, 'metadata') and getattr(response.metadata, 'cached', False)
+            logger.info(f"📄 PRIMARY[{primary_trace_id}]: Response cached status: {is_cached}")
             if is_cached:
                 self._cached_message_sent = True
-                logger.info(f"✅ PRIMARY: Sent complete message for cached response: {content[:50]}...")
+                logger.info(f"✅ PRIMARY[{primary_trace_id}]: Sent complete message for cached response: {content[:50]}...")
             else:
-                logger.info(f"✅ PRIMARY: Sent complete message (non-cached response): {content[:50]}...")
+                logger.info(f"✅ PRIMARY[{primary_trace_id}]: Sent complete message (non-cached response): {content[:50]}...")
+        else:
+            logger.info(f"⚠️ PRIMARY[{primary_trace_id}]: No content to send - response: {response}, has_content: {hasattr(response, 'content') if response else False}")
             
+        logger.info(f"🏁 PRIMARY[{primary_trace_id}]: _llm_response_messages_with_context finished")
         return response
         
     async def _llm_response_messages_async_with_context(self, agent: ChatAgent, *args, **kwargs):
         """Override for llm_response_messages_async - PRIMARY MESSAGE SENDER (async)."""
-        logger.info("🔧 _llm_response_messages_async_with_context called (PRIMARY SENDER ASYNC)")
+        primary_async_trace_id = str(uuid4())[:8]
+        logger.info(f"🔧 PRIMARY_ASYNC[{primary_async_trace_id}]: _llm_response_messages_async_with_context called (ASYNC)")
+        logger.info(f"🔧 PRIMARY_ASYNC[{primary_async_trace_id}]: Args: {args}, Kwargs: {kwargs}")
+        logger.info(f"🔧 PRIMARY_ASYNC[{primary_async_trace_id}]: Agent: {agent.config.name}")
+        logger.info(f"🔧 PRIMARY_ASYNC[{primary_async_trace_id}]: Current dedup state - sent_hashes: {len(self._sent_message_hashes)}, message_sent_by_primary: {self._message_sent_by_primary}")
         
         # Call original method
+        logger.info(f"⚙️ PRIMARY_ASYNC[{primary_async_trace_id}]: Calling original async method...")
         response = await agent._original_llm_response_messages_async(*args, **kwargs)
+        logger.info(f"⚙️ PRIMARY_ASYNC[{primary_async_trace_id}]: Original async method returned: {type(response)}, has_content: {hasattr(response, 'content') if response else False}")
         
         # This is the PRIMARY and AUTHORITATIVE method for sending messages (async version)
         if response and hasattr(response, 'content') and response.content:
             content = response.content.strip()
+            content_hash = self._get_message_hash(content)
+            
+            logger.info(f"📝 PRIMARY_ASYNC[{primary_async_trace_id}]: Processing response content: {content[:100]}...")
+            logger.info(f"📝 PRIMARY_ASYNC[{primary_async_trace_id}]: Content hash: {content_hash}")
+            logger.info(f"📝 PRIMARY_ASYNC[{primary_async_trace_id}]: Content length: {len(content)}")
             
             # Check if we've already sent this message
-            if self._is_message_already_sent(content):
-                logger.info(f"🚫 PRIMARY ASYNC: Message already sent, skipping duplicate: {content[:50]}...")
+            already_sent = self._is_message_already_sent(content)
+            logger.info(f"🔍 PRIMARY_ASYNC[{primary_async_trace_id}]: Already sent check: {already_sent}")
+            logger.info(f"🔍 PRIMARY_ASYNC[{primary_async_trace_id}]: Current sent hashes: {self._sent_message_hashes}")
+            
+            if already_sent:
+                logger.info(f"🚫 PRIMARY_ASYNC[{primary_async_trace_id}]: Message already sent, skipping duplicate: {content[:50]}...")
                 return response
             
             # Send the message and mark as sent by primary
+            logger.info(f"🚀 PRIMARY_ASYNC[{primary_async_trace_id}]: Sending assistant message via _send_assistant_message")
             self._send_assistant_message(content)
+            logger.info(f"📌 PRIMARY_ASYNC[{primary_async_trace_id}]: Marking message as sent")
             self._mark_message_as_sent(content)
             self._message_sent_by_primary = True
             
             # Update cached message tracking
             is_cached = hasattr(response, 'metadata') and getattr(response.metadata, 'cached', False)
+            logger.info(f"📄 PRIMARY_ASYNC[{primary_async_trace_id}]: Response cached status: {is_cached}")
             if is_cached:
                 self._cached_message_sent = True
-                logger.info(f"✅ PRIMARY ASYNC: Sent complete message for cached response: {content[:50]}...")
+                logger.info(f"✅ PRIMARY_ASYNC[{primary_async_trace_id}]: Sent complete message for cached response: {content[:50]}...")
             else:
-                logger.info(f"✅ PRIMARY ASYNC: Sent complete message (non-cached response): {content[:50]}...")
+                logger.info(f"✅ PRIMARY_ASYNC[{primary_async_trace_id}]: Sent complete message (non-cached response): {content[:50]}...")
+        else:
+            logger.info(f"⚠️ PRIMARY_ASYNC[{primary_async_trace_id}]: No content to send - response: {response}, has_content: {hasattr(response, 'content') if response else False}")
             
+        logger.info(f"🏁 PRIMARY_ASYNC[{primary_async_trace_id}]: _llm_response_messages_async_with_context finished")
         return response
         
     def _agent_response_with_context(self, agent: ChatAgent, *args, **kwargs):
@@ -486,23 +573,59 @@ class WebSocketCallbacks:
     # Utility Methods
     
     def _get_message_hash(self, content: str) -> str:
-        """Generate a hash for message content to track duplicates."""
-        return hashlib.sha256(content.encode('utf-8')).hexdigest()[:16]
+        """Generate a hash for message content to track duplicates with detailed logging."""
+        dedup_trace_id = str(uuid4())[:8]
+        logger.info(f"🔑 DEDUP[{dedup_trace_id}]: Generating hash for content: {content[:100]}...")
+        logger.info(f"🔑 DEDUP[{dedup_trace_id}]: Content length: {len(content)}")
+        
+        # Use SHA256 hash of content
+        content_bytes = content.encode('utf-8')
+        hash_full = hashlib.sha256(content_bytes).hexdigest()
+        hash_short = hash_full[:16]
+        
+        logger.info(f"🔑 DEDUP[{dedup_trace_id}]: Generated hash: {hash_short} (full: {hash_full})")
+        return hash_short
     
     def _is_message_already_sent(self, content: str) -> bool:
-        """Check if a message with this content has already been sent."""
+        """Check if a message with this content has already been sent with detailed logging."""
+        dedup_check_trace_id = str(uuid4())[:8]
+        logger.info(f"🔍 DEDUP_CHECK[{dedup_check_trace_id}]: Checking if message already sent: {content[:100]}...")
+        logger.info(f"🔍 DEDUP_CHECK[{dedup_check_trace_id}]: Content length: {len(content) if content else 0}")
+        
         if not content or not content.strip():
+            logger.info(f"🔍 DEDUP_CHECK[{dedup_check_trace_id}]: Empty content, returning True (don't send empty messages)")
             return True  # Don't send empty messages
         
-        message_hash = self._get_message_hash(content.strip())
-        return message_hash in self._sent_message_hashes
+        content_stripped = content.strip()
+        message_hash = self._get_message_hash(content_stripped)
+        
+        logger.info(f"🔍 DEDUP_CHECK[{dedup_check_trace_id}]: Message hash: {message_hash}")
+        logger.info(f"🔍 DEDUP_CHECK[{dedup_check_trace_id}]: Current sent hashes ({len(self._sent_message_hashes)}): {list(self._sent_message_hashes)}")
+        
+        already_sent = message_hash in self._sent_message_hashes
+        logger.info(f"🔍 DEDUP_CHECK[{dedup_check_trace_id}]: Already sent result: {already_sent}")
+        
+        return already_sent
     
     def _mark_message_as_sent(self, content: str) -> None:
-        """Mark a message as sent to prevent duplicates."""
+        """Mark a message as sent to prevent duplicates with detailed logging."""
+        dedup_mark_trace_id = str(uuid4())[:8]
+        logger.info(f"📌 DEDUP_MARK[{dedup_mark_trace_id}]: Marking message as sent: {content[:100]}...")
+        logger.info(f"📌 DEDUP_MARK[{dedup_mark_trace_id}]: Content length: {len(content) if content else 0}")
+        
         if content and content.strip():
-            message_hash = self._get_message_hash(content.strip())
+            content_stripped = content.strip()
+            message_hash = self._get_message_hash(content_stripped)
+            
+            logger.info(f"📌 DEDUP_MARK[{dedup_mark_trace_id}]: Generated hash: {message_hash}")
+            logger.info(f"📌 DEDUP_MARK[{dedup_mark_trace_id}]: Before adding - sent hashes ({len(self._sent_message_hashes)}): {list(self._sent_message_hashes)}")
+            
             self._sent_message_hashes.add(message_hash)
-            logger.debug(f"📝 Marked message as sent: {message_hash}")
+            
+            logger.info(f"📌 DEDUP_MARK[{dedup_mark_trace_id}]: After adding - sent hashes ({len(self._sent_message_hashes)}): {list(self._sent_message_hashes)}")
+            logger.info(f"✅ DEDUP_MARK[{dedup_mark_trace_id}]: Successfully marked message as sent: {message_hash}")
+        else:
+            logger.info(f"⚠️ DEDUP_MARK[{dedup_mark_trace_id}]: Empty content, not marking as sent")
     
     def _reset_deduplication_state(self) -> None:
         """Reset deduplication state for a new response cycle."""
@@ -511,13 +634,19 @@ class WebSocketCallbacks:
         logger.debug("🔄 Reset deduplication state for new response cycle")
     
     def _send_assistant_message(self, content: str):
-        """Send an assistant message to the UI."""
+        """Send an assistant message to the UI with detailed logging."""
+        assistant_trace_id = str(uuid4())[:8]
+        logger.info(f"🤖 ASSISTANT[{assistant_trace_id}]: _send_assistant_message called")
+        logger.info(f"🤖 ASSISTANT[{assistant_trace_id}]: Content: {content[:100] if content else 'None'}...")
+        logger.info(f"🤖 ASSISTANT[{assistant_trace_id}]: Content length: {len(content) if content else 0}")
+        
         # Don't send empty messages
         if not content or not content.strip():
-            logger.warning("Skipping empty assistant message")
+            logger.warning(f"⚠️ ASSISTANT[{assistant_trace_id}]: Skipping empty assistant message")
             return
             
         msg_id = str(uuid4())
+        logger.info(f"🤖 ASSISTANT[{assistant_trace_id}]: Generated message ID: {msg_id}")
         
         message = CompleteMessage(
             message=ChatMessage(
@@ -526,18 +655,81 @@ class WebSocketCallbacks:
                 sender="assistant"
             )
         )
+        
+        logger.info(f"🤖 ASSISTANT[{assistant_trace_id}]: Created CompleteMessage with ChatMessage")
+        logger.info(f"🤖 ASSISTANT[{assistant_trace_id}]: Calling _queue_message...")
         self._queue_message(message.dict())
+        logger.info(f"✅ ASSISTANT[{assistant_trace_id}]: Message queued successfully")
     
     def _queue_message(self, message: dict):
-        """Queue a message for WebSocket delivery."""
+        """Queue a message for WebSocket transmission with detailed logging."""
+        msg_type = message.get('type', 'unknown')
+        msg_id = message.get('id', 'no-id')
+        content_preview = str(message.get('content', ''))[:50] + '...' if len(str(message.get('content', ''))) > 50 else str(message.get('content', ''))
+        
+        logger.error(f"🔥 WEBSOCKET QUEUE: type={msg_type}, id={msg_id}, content='{content_preview}'")
+        logger.error(f"🔥 FULL MESSAGE: {message}")
+        
+        # Also log the call stack to see where this is coming from
+        import traceback
+        stack_trace = ''.join(traceback.format_stack()[-3:-1])  # Last 2 frames before this
+        logger.error(f"🔥 CALL STACK:\n{stack_trace}")
+        """Queue a message for WebSocket delivery with ultra-detailed logging."""
+        import json
+        from datetime import datetime
+        
+        # Generate unique trace ID for this message
+        trace_id = str(uuid4())[:8]
+        message['_trace_id'] = trace_id
+        
+        # Extract key message details for logging
+        msg_type = message.get('type', 'unknown')
+        msg_id = message.get('message_id') or message.get('message', {}).get('id', 'no-id')
+        content_preview = ''
+        
+        if 'message' in message and 'content' in message['message']:
+            content = message['message']['content']
+            content_preview = content[:50] if content else 'empty'
+        elif 'token' in message:
+            content_preview = f"TOKEN: {message['token'][:20]}"
+        
+        # Calculate queue size before adding
+        try:
+            queue_size_before = self.context.message_queue.qsize()
+        except:
+            queue_size_before = 'unknown'
+        
+        logger.info(f"🚀 QUEUE[{trace_id}]: Queuing message type={msg_type}, msg_id={msg_id}, content={content_preview}, queue_size_before={queue_size_before}")
+        logger.info(f"📦 QUEUE[{trace_id}]: Full message: {json.dumps(message, indent=2, default=str)[:500]}...")
+        
+        # Track the call stack to see who's calling this
+        import traceback
+        stack = traceback.extract_stack()
+        caller_info = []
+        for frame in stack[-4:-1]:  # Get last 3 frames before this one
+            caller_info.append(f"{frame.filename.split('/')[-1]}:{frame.lineno}:{frame.name}")
+        logger.info(f"📍 QUEUE[{trace_id}]: Called from: {' -> '.join(caller_info)}")
+        
         def _put_message():
-            self.context.message_queue.put_nowait(message)
+            try:
+                self.context.message_queue.put_nowait(message)
+                # Calculate queue size after adding
+                try:
+                    queue_size_after = self.context.message_queue.qsize()
+                except:
+                    queue_size_after = 'unknown'
+                logger.info(f"✅ QUEUE[{trace_id}]: Successfully queued, queue_size_after={queue_size_after}")
+            except Exception as e:
+                logger.error(f"❌ QUEUE[{trace_id}]: Failed to queue message: {e}")
+                raise
             
         # Thread-safe queuing
         if self.context.event_loop.is_running():
+            logger.info(f"🔄 QUEUE[{trace_id}]: Using call_soon_threadsafe")
             self.context.event_loop.call_soon_threadsafe(_put_message)
         else:
             # Fallback for edge cases
+            logger.info(f"🔄 QUEUE[{trace_id}]: Using run_coroutine_threadsafe (fallback)")
             asyncio.run_coroutine_threadsafe(
                 self.context.message_queue.put(message),
                 self.context.event_loop

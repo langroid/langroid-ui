@@ -39,8 +39,31 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
   const wsRef = useRef<WebSocket | null>(null);
   const inputRef = useRef<ChatInputRef | null>(null);
   
-  // Store message IDs in state so they persist across reconnections
-  const [messageIds, setMessageIds] = useState<Set<string>>(new Set());
+  // Store message IDs in state so they persist across reconnections AND React re-mounts
+  const getPersistedMessageIds = (): Set<string> => {
+    try {
+      const stored = sessionStorage.getItem('langroid_message_ids');
+      if (stored) {
+        const idsArray = JSON.parse(stored);
+        return new Set(idsArray);
+      }
+    } catch (error) {
+      console.warn('Failed to load persisted message IDs:', error);
+    }
+    return new Set();
+  };
+
+  const [messageIds, setMessageIds] = useState<Set<string>>(getPersistedMessageIds);
+
+  // Persist message IDs to sessionStorage whenever they change
+  useEffect(() => {
+    try {
+      const idsArray = Array.from(messageIds);
+      sessionStorage.setItem('langroid_message_ids', JSON.stringify(idsArray));
+    } catch (error) {
+      console.warn('Failed to persist message IDs:', error);
+    }
+  }, [messageIds]);
 
   // Auto-scroll to bottom when new messages arrive
   const scrollToBottom = () => {

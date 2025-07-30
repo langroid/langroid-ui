@@ -199,22 +199,73 @@ class CallbackChatSession:
         logger.info(f"Stopped _process_outgoing_messages for session {self.session_id}")
                 
     async def _send_message(self, message: Any):
-        """Send a message via WebSocket."""
+        """Send a message via WebSocket with detailed logging."""
+        import json
+        from datetime import datetime
+        
+        # Extract trace ID if present in message
+        trace_id = 'unknown'
+        if isinstance(message, dict) and '_trace_id' in message:
+            trace_id = message['_trace_id']
+        
+        # Extract message details for logging
+        msg_type = 'unknown'
+        msg_id = 'no-id'
+        content_preview = 'no-content'
+        
+        if isinstance(message, dict):
+            msg_type = message.get('type', 'unknown')
+            msg_id = message.get('message_id', 'no-id')
+            if not msg_id or msg_id == 'no-id':
+                msg_content = message.get('message', {})
+                if isinstance(msg_content, dict):
+                    msg_id = msg_content.get('id', 'no-id')
+                else:
+                    msg_id = 'no-id'
+            if 'message' in message and 'content' in message['message']:
+                content = message['message']['content']
+                content_preview = content[:50] if content else 'empty'
+            elif 'token' in message:
+                content_preview = f"TOKEN: {message['token'][:20]}"
+        
+        logger.info(f"🚀 WEBSOCKET[{trace_id}]: Attempting to send message type={msg_type}, msg_id={msg_id}, content={content_preview}")
+        logger.info(f"🚀 WEBSOCKET[{trace_id}]: Session {self.session_id}, websocket_state={self._websocket_state.value}")
+        
         try:
             # Check if WebSocket is connected
-            if hasattr(self.websocket, 'client_state') and self.websocket.client_state.name != 'CONNECTED':
-                logger.warning(f"WebSocket not connected, skipping message: {message}")
+            websocket_state = getattr(self.websocket, 'client_state', None)
+            websocket_connected = websocket_state and websocket_state.name == 'CONNECTED'
+            logger.info(f"🔌 WEBSOCKET[{trace_id}]: WebSocket client state: {websocket_state.name if websocket_state else 'None'}, connected: {websocket_connected}")
+            
+            if not websocket_connected:
+                logger.warning(f"⚠️ WEBSOCKET[{trace_id}]: WebSocket not connected, skipping message send")
                 self.set_websocket_state(WebSocketState.DISCONNECTED)
                 return
-                
+            
+            # Send the message
+            logger.info(f"📤 WEBSOCKET[{trace_id}]: Sending message via WebSocket...")
             if isinstance(message, dict):
+                # Log full message for debugging (truncated)
+                message_json = json.dumps(message, indent=2, default=str)[:1000]
+                logger.info(f"📦 WEBSOCKET[{trace_id}]: Full message: {message_json}...")
                 await self.websocket.send_json(message)
             else:
-                await self.websocket.send_json(message.model_dump())
+                message_dump = message.model_dump()
+                message_json = json.dumps(message_dump, indent=2, default=str)[:1000]
+                logger.info(f"📦 WEBSOCKET[{trace_id}]: Full message (model_dump): {message_json}...")
+                await self.websocket.send_json(message_dump)
+                
+            logger.info(f"✅ WEBSOCKET[{trace_id}]: Message sent successfully")
+            
         except Exception as e:
-            logger.error(f"Error sending message: {e}")
+            logger.error(f"❌ WEBSOCKET[{trace_id}]: Error sending message: {e}")
+            logger.error(f"❌ WEBSOCKET[{trace_id}]: Exception type: {type(e).__name__}")
+            import traceback
+            logger.error(f"❌ WEBSOCKET[{trace_id}]: Stack trace: {traceback.format_exc()}")
+            
             # Update WebSocket state and mark session as not running if WebSocket fails
             if "WebSocket" in str(e) or "not connected" in str(e).lower():
+                logger.error(f"🚫 WEBSOCKET[{trace_id}]: WebSocket connection failed, updating state")
                 self.set_websocket_state(WebSocketState.DISCONNECTED)
                 self._running = False
                 
