@@ -5,8 +5,10 @@ import asyncio
 import logging
 import queue
 import threading
+import time
 from typing import Dict, Optional, Any
 from uuid import uuid4
+from enum import Enum
 
 from fastapi import WebSocket
 import langroid as lr
@@ -18,6 +20,13 @@ from .streaming_agent import StreamingChatAgent, create_streaming_agent
 from models.messages import ConnectionStatus
 
 logger = logging.getLogger(__name__)
+
+
+class WebSocketState(Enum):
+    """WebSocket connection states."""
+    CONNECTED = "connected"
+    DISCONNECTED = "disconnected"
+    RECONNECTING = "reconnecting"
 
 
 class CallbackChatSession:
@@ -41,6 +50,13 @@ class CallbackChatSession:
         self._task_thread: Optional[threading.Thread] = None
         self._processor_task: Optional[asyncio.Task] = None
         
+        # WebSocket connection state tracking
+        self._websocket_state = WebSocketState.CONNECTED
+        self._websocket_state_lock = threading.Lock()
+        self._task_paused = False
+        self._pause_event = threading.Event()
+        self._pause_event.set()  # Start unpaused
+        
         logger.info(f"CallbackChatSession created: {session_id}")
         
     async def initialize(self, agent: ChatAgent):
@@ -52,7 +68,8 @@ class CallbackChatSession:
             session_id=self.session_id,
             websocket=self.websocket,
             message_queue=self.outgoing_queue,
-            user_input_queue=self.user_input_queue
+            user_input_queue=self.user_input_queue,
+            session=self
         )
         
         # Attach callbacks to agent
@@ -69,6 +86,50 @@ class CallbackChatSession:
         self.callbacks.update_task_responders(self.task)
         
         logger.info(f"Session initialized with agent: {agent.config.name}")
+        
+    def set_websocket_state(self, state: WebSocketState):
+        """Set the WebSocket connection state and handle task pausing/resuming."""
+        with self._websocket_state_lock:
+            old_state = self._websocket_state
+            self._websocket_state = state
+            
+            if state == WebSocketState.DISCONNECTED:
+                self._pause_task()
+            elif state == WebSocketState.CONNECTED and old_state != WebSocketState.CONNECTED:
+                self._resume_task()
+                
+            logger.info(f"WebSocket state changed: {old_state.value} -> {state.value}")
+            
+    def _pause_task(self):
+        """Pause task processing when WebSocket disconnects."""
+        if not self._task_paused:
+            self._task_paused = True
+            self._pause_event.clear()
+            logger.info(f"Task paused for session {self.session_id}")
+            
+    def _resume_task(self):
+        """Resume task processing when WebSocket reconnects."""
+        if self._task_paused:
+            self._task_paused = False
+            self._pause_event.set()
+            logger.info(f"Task resumed for session {self.session_id}")
+            
+    def _clear_stale_user_input(self):
+        """Clear any stale messages from user input queue."""
+        cleared_count = 0
+        while not self.user_input_queue.empty():
+            try:
+                self.user_input_queue.get_nowait()
+                cleared_count += 1
+            except queue.Empty:
+                break
+        if cleared_count > 0:
+            logger.info(f"Cleared {cleared_count} stale user input messages from queue")
+            
+    def is_websocket_connected(self) -> bool:
+        """Check if WebSocket is currently connected."""
+        with self._websocket_state_lock:
+            return self._websocket_state == WebSocketState.CONNECTED
         
     async def start(self, send_greeting: bool = True):
         """Start the chat session.
@@ -143,6 +204,7 @@ class CallbackChatSession:
             # Check if WebSocket is connected
             if hasattr(self.websocket, 'client_state') and self.websocket.client_state.name != 'CONNECTED':
                 logger.warning(f"WebSocket not connected, skipping message: {message}")
+                self.set_websocket_state(WebSocketState.DISCONNECTED)
                 return
                 
             if isinstance(message, dict):
@@ -151,8 +213,9 @@ class CallbackChatSession:
                 await self.websocket.send_json(message.model_dump())
         except Exception as e:
             logger.error(f"Error sending message: {e}")
-            # Mark session as not running if WebSocket fails
+            # Update WebSocket state and mark session as not running if WebSocket fails
             if "WebSocket" in str(e) or "not connected" in str(e).lower():
+                self.set_websocket_state(WebSocketState.DISCONNECTED)
                 self._running = False
                 
             
@@ -161,12 +224,15 @@ class CallbackChatSession:
         msg_type = data.get("type")
         
         if msg_type == "user_input" or msg_type == "message":
-            # Put user input in queue for agent
-            content = data.get("content", "")
-            logger.info(f"🟡 Received message type: {msg_type}, content: {content[:50]}...")
-            logger.info(f"🟡 Queue object: {id(self.user_input_queue)}")
-            self.user_input_queue.put(content)
-            logger.info(f"🟢 Successfully queued user input!")
+            # Only process user input if WebSocket is connected
+            if self.is_websocket_connected():
+                content = data.get("content", "")
+                logger.info(f"🟡 Received message type: {msg_type}, content: {content[:50]}...")
+                logger.info(f"🟡 Queue object: {id(self.user_input_queue)}")
+                self.user_input_queue.put(content)
+                logger.info(f"🟢 Successfully queued user input!")
+            else:
+                logger.warning(f"Ignoring user input while WebSocket is {self._websocket_state.value}")
             
         elif msg_type == "ping":
             # Respond to ping
@@ -232,8 +298,12 @@ class CallbackSessionManager:
                     # Update the outgoing queue in callbacks to use new websocket
                     if session.callbacks:
                         session.callbacks.websocket = websocket
+                    
+                    # Clear stale user input and update WebSocket state
+                    session._clear_stale_user_input()
+                    session.set_websocket_state(WebSocketState.CONNECTED)
                         
-                    logger.info(f"Reusing session {existing_session_id} for browser {browser_session_id} - updated WebSocket")
+                    logger.info(f"Reusing session {existing_session_id} for browser {browser_session_id} - updated WebSocket and cleared stale input")
                     
                     # Don't start a new task - the existing one is already running
                     return session, False

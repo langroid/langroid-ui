@@ -26,16 +26,20 @@ sys.path.insert(0, str(Path(__file__).parent))
 load_dotenv()
 
 # Import our callback-based session manager
-from core.session_callbacks import CallbackSessionManager
+from core.session_callbacks import CallbackSessionManager, WebSocketState
 from core.agent_factory import create_agent
 from core.streaming_agent import create_streaming_agent
 from models.messages import ConnectionStatus
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+
+# Set specific logger levels for session debugging
+logging.getLogger("core.session_callbacks").setLevel(logging.DEBUG)
+logging.getLogger("core.websocket_callbacks").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Create session manager
@@ -144,8 +148,13 @@ async def websocket_endpoint(websocket: WebSocket):
             
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for session {session.session_id if session else 'unknown'}")
+        if session:
+            # Mark session as disconnected to pause task processing
+            session.set_websocket_state(WebSocketState.DISCONNECTED)
     except Exception as e:
         logger.error(f"WebSocket error: {e}", exc_info=True)
+        if session:
+            session.set_websocket_state(WebSocketState.DISCONNECTED)
         try:
             await websocket.send_json({
                 "type": "error",

@@ -44,6 +44,7 @@ class CallbackContext:
     current_message_id: Optional[str] = None
     current_stream_id: Optional[str] = None
     current_agent: Optional[Any] = None  # Reference to current agent
+    session: Optional[Any] = None  # Reference to the session for pause/resume control
     
 
 
@@ -326,6 +327,15 @@ class WebSocketCallbacks:
         logger.info(f"🔵 get_user_response CALLED! prompt: {prompt}")
         logger.info(f"🔵 Queue object: {id(self.context.user_input_queue)}")
         
+        # Check if we need to wait for WebSocket reconnection
+        if self.context.session and hasattr(self.context.session, '_pause_event'):
+            pause_event = self.context.session._pause_event
+            if not pause_event.is_set():
+                logger.info("🚫 Task paused, waiting for WebSocket reconnection...")
+                pause_event.wait(timeout=300)  # Wait up to 5 minutes for reconnection
+                if pause_event.is_set():
+                    logger.info("✅ Task resumed after WebSocket reconnection")
+                    
         # Wait for user input
         try:
             logger.info("🔵 About to wait on queue.get()...")
@@ -575,7 +585,8 @@ def create_websocket_callbacks(
     session_id: str,
     websocket: Any,
     message_queue: asyncio.Queue,
-    user_input_queue: queue.Queue
+    user_input_queue: queue.Queue,
+    session: Any = None
 ) -> WebSocketCallbacks:
     """
     Factory function to create WebSocket callbacks with proper context.
@@ -600,7 +611,8 @@ def create_websocket_callbacks(
         websocket=websocket,
         message_queue=message_queue,
         user_input_queue=user_input_queue,
-        event_loop=loop
+        event_loop=loop,
+        session=session
     )
     
     return WebSocketCallbacks(context)
